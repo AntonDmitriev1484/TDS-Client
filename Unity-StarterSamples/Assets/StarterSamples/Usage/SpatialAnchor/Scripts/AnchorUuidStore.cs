@@ -1,0 +1,76 @@
+// Copyright (c) Meta Platforms, Inc. and affiliates.
+
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using Meta.XR.Samples;
+using UnityEngine;
+
+/// <summary>
+/// Manages UUIDs of persisted anchors
+/// </summary>
+/// <remarks>
+/// In order to load anchors that were persisted in previous sessions, we need to remember their UUIDs. We could use
+/// any mechanism to save these UUIDs, and Unity's
+/// [PlayerPrefs](https://docs.unity3d.com/ScriptReference/PlayerPrefs.html) API provides a simple mechanism.
+///
+/// In a real app, you'd probably want to use a more sophisticated storage mechanism, but PlayerPrefs serves the
+/// purposes required by this sample.
+/// </remarks>
+[MetaCodeSample("StarterSample-SpatialAnchor")]
+public static class AnchorUuidStore
+{
+    public const string NumUuidsPlayerPref = "numUuids";
+
+    public static int Count => PlayerPrefs.GetInt(NumUuidsPlayerPref, 0);
+
+    public static HashSet<Guid> Uuids
+    {
+        get => Enumerable
+            .Range(0, Count)
+            .Select(GetUuidKey)
+            .Select(PlayerPrefs.GetString)
+            .Select(str => Guid.TryParse(str, out var uuid) ? uuid : Guid.Empty)
+            .Where(uuid => uuid != Guid.Empty)
+            .ToHashSet();
+
+        set
+        {
+            // Delete everything beyond the new count
+            foreach (var key in Enumerable.Range(0, Count).Select(GetUuidKey))
+            {
+                PlayerPrefs.DeleteKey(key);
+            }
+
+            // Set the new count
+            PlayerPrefs.SetInt(NumUuidsPlayerPref, value.Count);
+
+            // Update all the uuids
+            var index = 0;
+            foreach (var uuid in value)
+            {
+                PlayerPrefs.SetString(GetUuidKey(index++), uuid.ToString());
+            }
+        }
+    }
+
+    public static void Add(Guid uuid)
+    {
+        var uuids = Uuids;
+        if (uuids.Add(uuid))
+        {
+            Uuids = uuids;
+        }
+    }
+
+    public static void Remove(Guid uuid)
+    {
+        var uuids = Uuids;
+        if (uuids.Remove(uuid))
+        {
+            Uuids = uuids;
+        }
+    }
+
+    static string GetUuidKey(int index) => $"uuid{index}";
+}
