@@ -93,6 +93,8 @@ public class GrabbableCube : MonoBehaviour
 
         transform.SetPositionAndRotation(_followTarget.TransformPoint(_followLocalPosition),
             _followTarget.rotation * _followLocalRotation);
+
+        // TODO: Send object, pose, id, and grabbed state to server each time object pose is updated.
     }
 
     void ApplyColor()
