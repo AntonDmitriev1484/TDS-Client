@@ -1,8 +1,8 @@
 using UnityEngine;
 
 /// <summary>
-/// A cube whose grabbed state is set from outside (by <see cref="GameManager"/>, and later by
-/// a server). It turns orange while grabbed.
+/// A cube whose grabbed state is set from outside (by <see cref="CubeGameStateManager"/>, from
+/// the shared game state). It turns orange while grabbed.
 ///
 /// Invariant: the cube follows a hand only while <see cref="Grabbed"/> is true. Releasing
 /// (setting <see cref="Grabbed"/> to false) always forgets the hand, so a later grab can
@@ -93,8 +93,6 @@ public class GrabbableCube : MonoBehaviour
 
         transform.SetPositionAndRotation(_followTarget.TransformPoint(_followLocalPosition),
             _followTarget.rotation * _followLocalRotation);
-
-        // TODO: Send object, pose, id, and grabbed state to server each time object pose is updated.
     }
 
     void ApplyColor()
