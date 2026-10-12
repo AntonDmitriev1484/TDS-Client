@@ -19,11 +19,11 @@ namespace SharedModels.WebCommunication.DataTransferObjects
         /// </summary>
         public GameStateDTO() { }
 
-        public GameStateDTO(CubeGameMaster gameMaster)
+        public GameStateDTO(GameState gameState)
         {
-            PlayerIDs.AddRange(gameMaster.PlayerIDs);
+            PlayerIDs.AddRange(gameState.PlayerIDs);
 
-            foreach (CubeState cube in gameMaster.Cubes.Values)
+            foreach (CubeState cube in gameState.Cubes.Values)
                 Cubes.Add(cube.GetDeepCopy());
         }
     }

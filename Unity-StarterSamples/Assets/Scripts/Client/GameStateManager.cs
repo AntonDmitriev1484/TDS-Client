@@ -7,14 +7,14 @@ using UnityEngine;
 
 /// <summary>
 /// Manages the game state from the client's side. Keeps a non-authoritative
-/// <see cref="CubeGameMaster"/> in sync with the server and makes the scene reflect it.
+/// <see cref="GameState"/> in sync with the server and makes the scene reflect it.
 ///
 /// Our hand input (pinches from <see cref="GrabbableCubeManager"/>) becomes a
 /// <see cref="SingleAction"/> that is applied locally straight away and then sent to the server
 /// through <see cref="OnOutgoingDTO"/>. If the server disagrees, it answers with a
 /// <see cref="GameStateDTO"/>, and any cube we no longer have grab permission for is dropped.
 /// </summary>
-public class CubeGameStateManager : MonoBehaviour
+public class GameStateManager : MonoBehaviour
 {
     [SerializeField] GrabbableCubeManager _cubeManager;
 
@@ -28,7 +28,7 @@ public class CubeGameStateManager : MonoBehaviour
     readonly ConcurrentQueue<object> _incomingMessages = new ConcurrentQueue<object>();
     float _nextPoseSendTime;
 
-    public CubeGameMaster GameMaster { get; private set; }
+    public GameState GameState { get; private set; }
 
     public int LocalPlayerID { get; private set; } = -1;
 
@@ -47,10 +47,10 @@ public class CubeGameStateManager : MonoBehaviour
         if (_cubeManager == null)
             _cubeManager = FindFirstObjectByType<GrabbableCubeManager>();
 
-        GameMaster = new CubeGameMaster(isAuthoritative: false);
-        GameMaster.OnCubeAdded += HandleCubeAdded;
-        GameMaster.OnGrabPermissionsChanged += HandleGrabPermissionsChanged;
-        GameMaster.OnCubePoseChanged += HandleCubePoseChanged;
+        GameState = new GameState(isAuthoritative: false);
+        GameState.OnCubeAdded += HandleCubeAdded;
+        GameState.OnGrabPermissionsChanged += HandleGrabPermissionsChanged;
+        GameState.OnCubePoseChanged += HandleCubePoseChanged;
     }
 
     void OnEnable()
@@ -93,17 +93,17 @@ public class CubeGameStateManager : MonoBehaviour
     {
         if (objDTO is GameStateDTO gameStateDTO)
         {
-            GameMaster.ApplyGameState(gameStateDTO);
+            GameState.ApplyGameState(gameStateDTO);
         }
         else if (objDTO is SingleActionDTO singleActionDTO)
         {
             // The server already accepted this action, so a rejection here means we are out of sync.
-            if (!GameMaster.HandleSingleAction(singleActionDTO.Action))
-                Debug.LogWarning($"{nameof(CubeGameStateManager)}: server action rejected locally: {singleActionDTO.Action.FormatActionText()}");
+            if (!GameState.HandleSingleAction(singleActionDTO.Action))
+                Debug.LogWarning($"{nameof(GameStateManager)}: server action rejected locally: {singleActionDTO.Action.FormatActionText()}");
         }
         else
         {
-            Debug.LogError($"{nameof(CubeGameStateManager)}: incoming message of type {objDTO.GetType().Name} was never handled!");
+            Debug.LogError($"{nameof(GameStateManager)}: incoming message of type {objDTO.GetType().Name} was never handled!");
         }
     }
 
@@ -171,7 +171,7 @@ public class CubeGameStateManager : MonoBehaviour
 
         foreach (var cube in _cubeManager.Cubes.Values)
         {
-            if (cube.FollowTarget == null || !GameMaster.Cubes.TryGetValue(cube.Id, out var state))
+            if (cube.FollowTarget == null || !GameState.Cubes.TryGetValue(cube.Id, out var state))
                 continue;
 
             Transform t = cube.transform;
@@ -189,7 +189,7 @@ public class CubeGameStateManager : MonoBehaviour
     /// <returns>True if the action was accepted locally.</returns>
     bool HandleOurAction(SingleAction singleAction)
     {
-        if (!GameMaster.HandleSingleAction(singleAction))
+        if (!GameState.HandleSingleAction(singleAction))
             return false;
 
         OnOutgoingDTO?.Invoke(new SingleActionDTO(singleAction));

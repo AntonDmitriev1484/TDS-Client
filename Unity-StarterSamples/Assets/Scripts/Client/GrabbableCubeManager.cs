@@ -6,7 +6,7 @@ using UnityEngine;
 /// Spawns and tracks <see cref="GrabbableCube"/>s by id, and watches both tracked hands for
 /// pinches on them. It only reports hand input through <see cref="PinchStarted"/> and
 /// <see cref="PinchEnded"/>; deciding whether a cube is actually grabbed is left to
-/// <see cref="CubeGameStateManager"/>, which checks it against the shared game state.
+/// <see cref="GameStateManager"/>, which checks it against the shared game state.
 ///
 /// Uses only OVRHand / OVRSkeleton from the Meta XR Core SDK (no Interaction SDK needed).
 ///

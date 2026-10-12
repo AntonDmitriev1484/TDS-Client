@@ -8,14 +8,14 @@ using UnityEngine;
 
 /// <summary>
 /// The client's connection to the game server. Sends the DTOs that
-/// <see cref="CubeGameStateManager"/> produces and hands it the DTOs the server sends back.
+/// <see cref="GameStateManager"/> produces and hands it the DTOs the server sends back.
 ///
 /// Talks newline-delimited JSON over TCP (see <see cref="DTOSerializer"/>), opening every connection
 /// with a <see cref="ConnectDTO"/>. Reconnects on its own if the connection drops.
 /// </summary>
 public class ServerConnection : MonoBehaviour
 {
-    [SerializeField] CubeGameStateManager _client;
+    [SerializeField] GameStateManager _client;
 
     [SerializeField] string _host = "127.0.0.1";
     [SerializeField] int _port = 7777;
@@ -33,7 +33,7 @@ public class ServerConnection : MonoBehaviour
     void Awake()
     {
         if (_client == null)
-            _client = GetComponent<CubeGameStateManager>();
+            _client = GetComponent<GameStateManager>();
     }
 
     void OnEnable()

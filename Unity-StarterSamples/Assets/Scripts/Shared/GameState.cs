@@ -10,7 +10,7 @@ namespace SharedModels.Game
     /// the cubes and applies <see cref="SingleAction"/>s to them. It knows nothing about scenes,
     /// hands or sockets: managers listen to its events to update visuals or forward messages.
     /// </summary>
-    public class CubeGameMaster
+    public class GameState
     {
 
         #region Properties
@@ -32,7 +32,7 @@ namespace SharedModels.Game
 
         #region Constructor
 
-        public CubeGameMaster(bool isAuthoritative)
+        public GameState(bool isAuthoritative)
         {
             IsAuthoritative = isAuthoritative;
         }
@@ -47,7 +47,7 @@ namespace SharedModels.Game
         public void ServerInitialize(IEnumerable<int> playerIDs, IEnumerable<CubeState> cubes)
         {
             if (!IsAuthoritative)
-                throw new InvalidOperationException("Only the authoritative game master can initialize the game.");
+                throw new InvalidOperationException("Only the authoritative game state can initialize the game.");
 
             PlayerIDs.Clear();
             PlayerIDs.AddRange(playerIDs);
@@ -183,7 +183,7 @@ namespace SharedModels.Game
         public bool RevokeGrabPermissions(string cubeID)
         {
             if (!IsAuthoritative)
-                throw new InvalidOperationException("Only the authoritative game master can revoke grab permissions.");
+                throw new InvalidOperationException("Only the authoritative game state can revoke grab permissions.");
 
             if (!Cubes.TryGetValue(cubeID, out CubeState cube) || !cube.IsHeld)
                 return false;

@@ -6,19 +6,18 @@ using UnityEngine;
 
 /// <summary>
 /// Stands in for the game server while testing on a single headset. Like the server's
-/// GameManager, it owns the authoritative <see cref="CubeGameMaster"/>, starts the game, and
+/// GameManager, it owns the authoritative <see cref="GameState"/>, starts the game, and
 /// decides what each player is sent. Inbound messages are handled by <see cref="MessageHandler"/>.
 ///
-/// The client (<see cref="CubeGameStateManager"/> + <see cref="ServerConnection"/>) runs on the
+/// The client (<see cref="GameStateManager"/> + <see cref="ServerConnection"/>) runs on the
 /// same headset but only reaches this server over a local TCP connection, so pointing
 /// <see cref="ServerConnection"/> at a real server needs no changes on the client.
 /// </summary>
-public class OfflineGameManager : MonoBehaviour
+public class OfflineGameStateManager : MonoBehaviour
 {
     /// <summary>The players in the offline game: just the local headset.</summary>
     static readonly IReadOnlyList<int> PlayerIDs = new[] { 0 };
 
-    [SerializeField] GrabbableCubeManager _cubeManager;
     [SerializeField] MessageHandler _messageHandler;
 
     [SerializeField] float _spawnDistance = 1.0f;
@@ -32,21 +31,19 @@ public class OfflineGameManager : MonoBehaviour
     OVRCameraRig _rig;
 
     /// <summary>The authoritative game state; null until the game starts.</summary>
-    public CubeGameMaster GameMaster { get; private set; }
+    public GameState GameState { get; private set; }
 
     #region Unity Functions
 
     void Awake()
     {
-        if (_cubeManager == null)
-            _cubeManager = GetComponent<GrabbableCubeManager>();
         if (_messageHandler == null)
             _messageHandler = GetOrAddComponent<MessageHandler>();
 
         // Offline, this headset is also the client. Add its components if the scene doesn't have
         // them; they talk to this server only through the socket. The state manager goes first,
         // because the connection looks it up when added.
-        GetOrAddComponent<CubeGameStateManager>();
+        GetOrAddComponent<GameStateManager>();
         GetOrAddComponent<ServerConnection>();
     }
 
@@ -55,7 +52,7 @@ public class OfflineGameManager : MonoBehaviour
         _rig = FindFirstObjectByType<OVRCameraRig>();
         if (_rig == null)
         {
-            Debug.LogError($"{nameof(OfflineGameManager)}: no OVRCameraRig found in the scene.");
+            Debug.LogError($"{nameof(OfflineGameStateManager)}: no OVRCameraRig found in the scene.");
             yield break;
         }
 
@@ -82,8 +79,8 @@ public class OfflineGameManager : MonoBehaviour
         for (int i = 0; i < startingPoses.Length; i++)
             cubes.Add(new CubeState($"cube-{i}", startingPoses[i], PlayerIDs));
 
-        GameMaster = new CubeGameMaster(isAuthoritative: true);
-        GameMaster.ServerInitialize(PlayerIDs, cubes);
+        GameState = new GameState(isAuthoritative: true);
+        GameState.ServerInitialize(PlayerIDs, cubes);
 
         BroadcastGameState();
     }
@@ -99,7 +96,7 @@ public class OfflineGameManager : MonoBehaviour
 
         Vector3 right = Vector3.Cross(Vector3.up, forward);
         Vector3 center = head.position + forward * _spawnDistance;
-        Vector3 halfSpacing = right * (_cubeManager.CubeSize + _cubeGap) * 0.5f;
+        Vector3 halfSpacing = right * (0.25f + _cubeGap) * 0.5f;
         Quaternion rotation = Quaternion.LookRotation(forward);
 
         return new[]
@@ -129,8 +126,8 @@ public class OfflineGameManager : MonoBehaviour
     /// </summary>
     public void OnPlayerConnected(int playerID)
     {
-        if (GameMaster != null)
-            AddOutgoingDTO(playerID, new GameStateDTO(GameMaster));
+        if (GameState != null)
+            AddOutgoingDTO(playerID, new GameStateDTO(GameState));
     }
 
     /// <summary>
@@ -138,14 +135,14 @@ public class OfflineGameManager : MonoBehaviour
     /// </summary>
     public void OnPlayerDisconnected(int playerID)
     {
-        if (GameMaster == null)
+        if (GameState == null)
             return;
 
         bool changed = false;
-        foreach (CubeState cube in GameMaster.Cubes.Values)
+        foreach (CubeState cube in GameState.Cubes.Values)
         {
             if (cube.HolderPlayerID == playerID)
-                changed |= GameMaster.RevokeGrabPermissions(cube.Id);
+                changed |= GameState.RevokeGrabPermissions(cube.Id);
         }
 
         if (changed)
@@ -165,7 +162,7 @@ public class OfflineGameManager : MonoBehaviour
     void BroadcastGameState()
     {
         foreach (int playerID in PlayerIDs)
-            AddOutgoingDTO(playerID, new GameStateDTO(GameMaster));
+            AddOutgoingDTO(playerID, new GameStateDTO(GameState));
     }
 
     #endregion Process DTOs
@@ -179,11 +176,11 @@ public class OfflineGameManager : MonoBehaviour
     [ContextMenu("Revoke All Grab Permissions")]
     void RevokeAllGrabPermissions()
     {
-        if (GameMaster == null)
+        if (GameState == null)
             return;
 
-        foreach (string cubeID in GameMaster.Cubes.Keys)
-            GameMaster.RevokeGrabPermissions(cubeID);
+        foreach (string cubeID in GameState.Cubes.Keys)
+            GameState.RevokeGrabPermissions(cubeID);
 
         BroadcastGameState();
     }

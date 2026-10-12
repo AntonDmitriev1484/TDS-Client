@@ -1,7 +1,7 @@
 using UnityEngine;
 
 /// <summary>
-/// A cube whose grabbed state is set from outside (by <see cref="CubeGameStateManager"/>, from
+/// A cube whose grabbed state is set from outside (by <see cref="GameStateManager"/>, from
 /// the shared game state). It turns orange while grabbed.
 ///
 /// Invariant: the cube follows a hand only while <see cref="Grabbed"/> is true. Releasing

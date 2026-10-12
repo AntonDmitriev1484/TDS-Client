@@ -82,7 +82,7 @@ namespace SharedModels.Game
         public bool HasGrabPermission(int playerID) => GrabPermissions.TryGetValue(playerID, out bool allowed) && allowed;
 
         /// <summary>
-        /// Get a deep copy of this object, so a DTO never shares state with the game master that built it.
+        /// Get a deep copy of this object, so a DTO never shares data with the <see cref="GameState"/> that built it.
         /// </summary>
         public CubeState GetDeepCopy()
         {

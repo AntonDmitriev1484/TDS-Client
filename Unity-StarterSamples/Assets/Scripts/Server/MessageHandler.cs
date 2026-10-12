@@ -13,7 +13,7 @@ using UnityEngine;
 /// <summary>
 /// Handles inbound messages for the offline game server, the way the server's GameWebSocketHandler
 /// does: it accepts player connections, routes each DTO to its handler, validates it, and applies
-/// it to <see cref="OfflineGameManager"/>'s game master. It also keeps the player ID to connection
+/// it to <see cref="OfflineGameStateManager"/>'s game state. It also keeps the player ID to connection
 /// map and does the sending, which the server splits out into WebSocketConnectionManager.
 ///
 /// Players connect over TCP and exchange newline-delimited JSON (one <see cref="DTOSerializer"/>
@@ -23,7 +23,7 @@ using UnityEngine;
 /// </summary>
 public class MessageHandler : MonoBehaviour
 {
-    [SerializeField] OfflineGameManager _gameManager;
+    [SerializeField] OfflineGameStateManager _gameStateManager;
     [SerializeField] int _port = 7777;
 
     class Connection
@@ -47,8 +47,8 @@ public class MessageHandler : MonoBehaviour
 
     void Awake()
     {
-        if (_gameManager == null)
-            _gameManager = GetComponent<OfflineGameManager>();
+        if (_gameStateManager == null)
+            _gameStateManager = GetComponent<OfflineGameStateManager>();
     }
 
     void OnEnable()
@@ -175,7 +175,7 @@ public class MessageHandler : MonoBehaviour
             return;
         }
 
-        if (!_gameManager.IsPlayer(playerID))
+        if (!_gameStateManager.IsPlayer(playerID))
         {
             Debug.LogWarning($"{nameof(MessageHandler)}: player {playerID} is not in this game; closing the connection.");
             connection.Client.Close();
@@ -190,7 +190,7 @@ public class MessageHandler : MonoBehaviour
         _connectionsByPlayerID[playerID] = connection;
         Debug.Log($"{nameof(MessageHandler)}: player {playerID} connected.");
 
-        _gameManager.OnPlayerConnected(playerID);
+        _gameStateManager.OnPlayerConnected(playerID);
     }
 
     void HandleDisconnect(Connection connection)
@@ -204,7 +204,7 @@ public class MessageHandler : MonoBehaviour
         _connectionsByPlayerID.Remove(playerID);
         Debug.Log($"{nameof(MessageHandler)}: player {playerID} disconnected.");
 
-        _gameManager.OnPlayerDisconnected(playerID);
+        _gameStateManager.OnPlayerDisconnected(playerID);
     }
 
     #endregion Handle Connections
@@ -255,9 +255,9 @@ public class MessageHandler : MonoBehaviour
     /// <param name="actionDTO">The single action DTO.</param>
     void ProcessSingleAction(int playerID, SingleActionDTO actionDTO)
     {
-        CubeGameMaster gameMaster = _gameManager.GameMaster;
+        GameState gameState = _gameStateManager.GameState;
 
-        if (gameMaster == null)
+        if (gameState == null)
         {
             Debug.LogWarning($"{nameof(MessageHandler)}: action from player {playerID} arrived before the game started.");
             return;
@@ -266,22 +266,22 @@ public class MessageHandler : MonoBehaviour
         if (actionDTO.Action.PlayerID != playerID)
         {
             Debug.LogWarning($"{nameof(MessageHandler)}: DTO's player ID does not match the connection's player ID.");
-            _gameManager.AddOutgoingDTO(playerID, new GameStateDTO(gameMaster));
+            _gameStateManager.AddOutgoingDTO(playerID, new GameStateDTO(gameState));
             return;
         }
 
-        if (!gameMaster.HandleSingleAction(actionDTO.Action))
+        if (!gameState.HandleSingleAction(actionDTO.Action))
         {
             Debug.Log($"{nameof(MessageHandler)}: rejected {actionDTO.Action.FormatActionText()}");
-            _gameManager.AddOutgoingDTO(playerID, new GameStateDTO(gameMaster));
+            _gameStateManager.AddOutgoingDTO(playerID, new GameStateDTO(gameState));
             return;
         }
 
         // Send info about the action to the other players.
-        foreach (int otherPlayerID in gameMaster.PlayerIDs)
+        foreach (int otherPlayerID in gameState.PlayerIDs)
         {
             if (otherPlayerID != playerID)
-                _gameManager.AddOutgoingDTO(otherPlayerID, actionDTO);
+                _gameStateManager.AddOutgoingDTO(otherPlayerID, actionDTO);
         }
     }
 
