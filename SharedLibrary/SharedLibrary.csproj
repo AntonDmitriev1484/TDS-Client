@@ -1,0 +1,34 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+	<!-- Multi-target so older .NET Framework projects can reference this library -->
+	<TargetFrameworks>net10.0;net472</TargetFrameworks>
+  </PropertyGroup>
+
+  <!-- Enable modern SDK conveniences only for the newer target framework -->
+  <PropertyGroup Condition="'$(TargetFramework)' == 'net10.0'">
+	<ImplicitUsings>enable</ImplicitUsings>
+	<Nullable>enable</Nullable>
+  </PropertyGroup>
+
+  <!-- Keep legacy behavior for net472 to avoid generating C# 10 features like global usings by default -->
+  <PropertyGroup Condition="'$(TargetFramework)' == 'net472'">
+	<ImplicitUsings>disable</ImplicitUsings>
+	<Nullable>disable</Nullable>
+	<!-- Use a language version supported by older toolchains if necessary -->
+	<LangVersion>latest</LangVersion>
+  </PropertyGroup>
+
+	<ItemGroup>
+		<PackageReference Include="Newtonsoft.Json" Version="13.0.4" />
+	</ItemGroup>
+
+	<!-- Automated build target to copy the compiled DLL into client -->
+	<Target Name="CopyToUnity" AfterTargets="Build">
+		<Message Text="Checking if DLL exists..." Importance="high" />
+		<Copy SourceFiles="bin\$(Configuration)\$(TargetFramework)\SharedLibrary.dll" DestinationFolder="..\UnityClient\Assets\Plugins" Condition="Exists('bin\$(Configuration)\$(TargetFramework)\SharedLibrary.dll')" />
+		<Message Text="DLL copied successfully." Importance="high" Condition="Exists('bin\$(Configuration)\$(TargetFramework)\SharedLibrary.dll')" />
+		<Message Text="DLL not found, skipping copy." Importance="high" Condition="!Exists('bin\$(Configuration)\$(TargetFramework)\SharedLibrary.dll')" />
+	</Target>
+	
+</Project>

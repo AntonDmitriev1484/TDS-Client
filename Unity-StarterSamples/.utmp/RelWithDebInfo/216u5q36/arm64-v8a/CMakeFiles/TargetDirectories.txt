@@ -1,5 +1,0 @@
-C:/Users/antond2/Desktop/TDS-Client/Unity-StarterSamples/.utmp/RelWithDebInfo/216u5q36/arm64-v8a/CMakeFiles/edit_cache.dir
-C:/Users/antond2/Desktop/TDS-Client/Unity-StarterSamples/.utmp/RelWithDebInfo/216u5q36/arm64-v8a/CMakeFiles/rebuild_cache.dir
-C:/Users/antond2/Desktop/TDS-Client/Unity-StarterSamples/.utmp/RelWithDebInfo/216u5q36/arm64-v8a/GameActivity/CMakeFiles/game.dir
-C:/Users/antond2/Desktop/TDS-Client/Unity-StarterSamples/.utmp/RelWithDebInfo/216u5q36/arm64-v8a/GameActivity/CMakeFiles/edit_cache.dir
-C:/Users/antond2/Desktop/TDS-Client/Unity-StarterSamples/.utmp/RelWithDebInfo/216u5q36/arm64-v8a/GameActivity/CMakeFiles/rebuild_cache.dir
