@@ -1,8 +1,8 @@
+using SharedLibrary.Game.Actions;
 using System;
 using System.Collections.Generic;
-using System.Numerics;
 
-namespace SharedModels.Game
+namespace SharedLibrary.Game
 {
     /// <summary>
     /// The state of one cube, held identically by the server and every client: where it is and
@@ -14,9 +14,7 @@ namespace SharedModels.Game
 
         #region Properties
 
-        public string Id;
-        public Vector3 Position;
-        public Quaternion Rotation = Quaternion.Identity;
+        public string ID;
 
         /// <summary>
         /// Grab permission per player. The key is the player ID, and the value is whether that player
@@ -29,15 +27,7 @@ namespace SharedModels.Game
         List<int> _permissionPlayerIDs = new List<int>();
         List<bool> _permissionValues = new List<bool>();
 
-        public Pose Pose
-        {
-            get => new Pose(Position, Rotation);
-            set
-            {
-                Position = value.position;
-                Rotation = value.rotation;
-            }
-        }
+        public Pose Pose;
 
         /// <summary>The ID of the player holding grab permission, or null if nobody does.</summary>
         public int? HolderPlayerID
@@ -70,7 +60,7 @@ namespace SharedModels.Game
         /// </summary>
         public CubeState(string id, Pose pose, IEnumerable<int> playerIDs)
         {
-            Id = id;
+            ID = id;
             Pose = pose;
 
             foreach (int playerID in playerIDs)
@@ -88,9 +78,8 @@ namespace SharedModels.Game
         {
             return new CubeState
             {
-                Id = Id,
-                Position = Position,
-                Rotation = Rotation,
+                ID = ID,
+                Pose = Pose,
                 GrabPermissions = new Dictionary<int, bool>(GrabPermissions),
             };
         }

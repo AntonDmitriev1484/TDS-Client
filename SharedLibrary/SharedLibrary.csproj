@@ -1,22 +1,10 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-	<!-- Multi-target so older .NET Framework projects can reference this library -->
-	<TargetFrameworks>net10.0;net472</TargetFrameworks>
-  </PropertyGroup>
-
-  <!-- Enable modern SDK conveniences only for the newer target framework -->
-  <PropertyGroup Condition="'$(TargetFramework)' == 'net10.0'">
-	<ImplicitUsings>enable</ImplicitUsings>
-	<Nullable>enable</Nullable>
-  </PropertyGroup>
-
-  <!-- Keep legacy behavior for net472 to avoid generating C# 10 features like global usings by default -->
-  <PropertyGroup Condition="'$(TargetFramework)' == 'net472'">
-	<ImplicitUsings>disable</ImplicitUsings>
-	<Nullable>disable</Nullable>
-	<!-- Use a language version supported by older toolchains if necessary -->
-	<LangVersion>latest</LangVersion>
+	<TargetFrameworks>netstandard2.0;net472</TargetFrameworks>
+	  <ImplicitUsings>disable</ImplicitUsings>
+	  <Nullable>disable</Nullable>
+	  <LangVersion>latest</LangVersion>
   </PropertyGroup>
 
 	<ItemGroup>

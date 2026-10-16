@@ -1,3 +1,5 @@
+using SharedLibrary.Communication.DataTransferObjects;
+using SharedLibrary.Game;
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
@@ -6,8 +8,6 @@ using System.Net;
 using System.Net.Sockets;
 using System.Text;
 using System.Threading;
-using SharedModels.Game;
-using SharedModels.WebCommunication.DataTransferObjects;
 using UnityEngine;
 
 /// <summary>
@@ -24,7 +24,8 @@ using UnityEngine;
 public class MessageHandler : MonoBehaviour
 {
     [SerializeField] OfflineGameStateManager _gameStateManager;
-    [SerializeField] int _port = 7777;
+    [SerializeField] int _port = 5000;
+    [SerializeField] string _host = "";
 
     class Connection
     {
@@ -43,6 +44,13 @@ public class MessageHandler : MonoBehaviour
     Thread _acceptThread;
     volatile bool _listening;
 
+    [Serializable]
+    class ServerConfig
+    {
+        public string host;
+        public int port;
+    }
+
     #region Unity Functions
 
     void Awake()
@@ -53,6 +61,7 @@ public class MessageHandler : MonoBehaviour
 
     void OnEnable()
     {
+        LoadConfigFromStreamingAssets();
         StartListening();
     }
 
@@ -81,7 +90,16 @@ public class MessageHandler : MonoBehaviour
     {
         try
         {
-            _listener = new TcpListener(IPAddress.Any, _port);
+            IPAddress bindAddr = IPAddress.Any;
+            if (!string.IsNullOrEmpty(_host))
+            {
+                if (!IPAddress.TryParse(_host, out bindAddr))
+                {
+                    Debug.LogWarning($"{nameof(MessageHandler)}: invalid host '{_host}'; falling back to Any.");
+                    bindAddr = IPAddress.Any;
+                }
+            }
+            _listener = new TcpListener(bindAddr, _port);
             _listener.Start();
         }
         catch (SocketException e)
@@ -95,6 +113,44 @@ public class MessageHandler : MonoBehaviour
         _acceptThread = new Thread(AcceptLoop) { IsBackground = true, Name = "MessageHandler accept" };
         _acceptThread.Start();
         Debug.Log($"{nameof(MessageHandler)}: listening for players on TCP port {_port}.");
+    }
+
+    void LoadConfigFromStreamingAssets()
+    {
+        try
+        {
+            string configPath = Path.Combine(Application.streamingAssetsPath, "serverconfig.json");
+            if (!File.Exists(configPath))
+            {
+                Debug.Log($"{nameof(MessageHandler)}: no config file at {configPath}; using serialized values.");
+                return;
+            }
+
+            string json = File.ReadAllText(configPath);
+            if (string.IsNullOrWhiteSpace(json))
+            {
+                Debug.LogWarning($"{nameof(MessageHandler)}: config file {configPath} is empty; using serialized values.");
+                return;
+            }
+
+            var cfg = JsonUtility.FromJson<ServerConfig>(json);
+            if (cfg == null)
+            {
+                Debug.LogWarning($"{nameof(MessageHandler)}: failed to parse config file {configPath}; using serialized values.");
+                return;
+            }
+
+            if (!string.IsNullOrEmpty(cfg.host))
+                _host = cfg.host;
+            if (cfg.port != 0)
+                _port = cfg.port;
+
+            Debug.Log($"{nameof(MessageHandler)}: loaded config from {configPath} -> host={_host}, port={_port}");
+        }
+        catch (Exception ex)
+        {
+            Debug.LogWarning($"{nameof(MessageHandler)}: error reading config: {ex.Message}; using serialized values.");
+        }
     }
 
     void StopListening()
@@ -188,7 +244,6 @@ public class MessageHandler : MonoBehaviour
 
         connection.PlayerID = playerID;
         _connectionsByPlayerID[playerID] = connection;
-        Debug.Log($"{nameof(MessageHandler)}: player {playerID} connected.");
 
         _gameStateManager.OnPlayerConnected(playerID);
     }

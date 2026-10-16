@@ -1,11 +1,13 @@
 using Assets.Scripts.Utilities;
-using SharedModels.Game;
-using SharedModels.WebCommunication.DataTransferObjects;
+using SharedLibrary.Communication.DataTransferObjects;
+using SharedLibrary.Game;
 using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
-// Make SharedModels.Game.Pose unambiguous in this file
+// Make UnityEngine.Pose unambiguous in this file
 using Pose = UnityEngine.Pose;
+using Quaternion = UnityEngine.Quaternion;
+using Vector3 = UnityEngine.Vector3;
 
 /// <summary>
 /// Stands in for the game server while testing on a single headset. Like the server's
@@ -18,8 +20,16 @@ using Pose = UnityEngine.Pose;
 /// </summary>
 public class OfflineGameStateManager : MonoBehaviour
 {
-    /// <summary>The players in the offline game: just the local headset.</summary>
-    static readonly IReadOnlyList<int> PlayerIDs = new[] { 0 };
+    /// <summary>Return the players in the offline game: just the local headset.
+    /// The local player id is taken from the GameStateManager if available.</summary>
+    IReadOnlyList<int> GetPlayerIDs()
+    {
+        var gsm = GetComponent<GameStateManager>();
+        if (gsm != null && gsm.LocalPlayerID >= 0)
+            return new[] { gsm.LocalPlayerID };
+
+        return new[] { 0 };
+    }
 
     [SerializeField] MessageHandler _messageHandler;
 
@@ -79,11 +89,14 @@ public class OfflineGameStateManager : MonoBehaviour
     {
         var cubes = new List<CubeState>();
         Pose[] startingPoses = GetStartingCubePoses();
+
         for (int i = 0; i < startingPoses.Length; i++)
-            cubes.Add(new CubeState($"cube-{i}", Conversions.ToSharedPose(startingPoses[i]), PlayerIDs));
+        {
+            cubes.Add(new CubeState($"cube-{i}", Conversions.ToSharedPose(startingPoses[i]), GetPlayerIDs()));
+        }
 
         GameState = new GameState(isAuthoritative: true);
-        GameState.ServerInitialize(PlayerIDs, cubes);
+        GameState.ServerInitialize(GetPlayerIDs(), cubes);
 
         BroadcastGameState();
     }
@@ -115,7 +128,7 @@ public class OfflineGameStateManager : MonoBehaviour
 
     public bool IsPlayer(int playerID)
     {
-        foreach (int id in PlayerIDs)
+        foreach (int id in GetPlayerIDs())
         {
             if (id == playerID)
                 return true;
@@ -130,7 +143,9 @@ public class OfflineGameStateManager : MonoBehaviour
     public void OnPlayerConnected(int playerID)
     {
         if (GameState != null)
+        {
             AddOutgoingDTO(playerID, new GameStateDTO(GameState));
+        }
     }
 
     /// <summary>
@@ -145,7 +160,7 @@ public class OfflineGameStateManager : MonoBehaviour
         foreach (CubeState cube in GameState.Cubes.Values)
         {
             if (cube.HolderPlayerID == playerID)
-                changed |= GameState.RevokeGrabPermissions(cube.Id);
+                changed |= GameState.RevokeGrabPermissions(cube.ID);
         }
 
         if (changed)
@@ -160,11 +175,14 @@ public class OfflineGameStateManager : MonoBehaviour
     /// Sends a DTO to a player.
     /// </summary>
     /// <returns>True if the player is connected and the message was sent.</returns>
-    public bool AddOutgoingDTO(int playerID, object outgoingDTO) => _messageHandler.SendObject(playerID, outgoingDTO);
+    public bool AddOutgoingDTO(int playerID, object outgoingDTO)
+    {
+        return _messageHandler.SendObject(playerID, outgoingDTO);
+    }
 
     void BroadcastGameState()
     {
-        foreach (int playerID in PlayerIDs)
+        foreach (int playerID in GetPlayerIDs())
             AddOutgoingDTO(playerID, new GameStateDTO(GameState));
     }
 

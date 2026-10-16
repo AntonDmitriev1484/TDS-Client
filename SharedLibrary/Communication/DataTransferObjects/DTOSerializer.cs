@@ -1,7 +1,7 @@
+using SharedLibrary.Utilities;
 using System;
-using SharedModels.Utilities;
 
-namespace SharedModels.WebCommunication.DataTransferObjects
+namespace SharedLibrary.Communication.DataTransferObjects
 {
     /// <summary>
     /// Wire format for DTOs: <c>{"type": "&lt;DTO class name&gt;", "data": "&lt;DTO as JSON&gt;"}</c>.

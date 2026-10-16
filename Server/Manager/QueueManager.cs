@@ -1,7 +1,6 @@
 ﻿using System.Collections.Concurrent;
-using WebServer.Manager;
 
-namespace WebServer.Controller
+namespace Server.Manager
 {
     /// <summary>
     /// Handles adding users to a queue for the main game session.
@@ -58,7 +57,9 @@ namespace WebServer.Controller
         }
 
         /// <summary>
-        /// Process each queue and attempt to match players. This repeats infinitely, either restarting every 5 seconds or after all matchings have been made in the past interation.
+        /// Process each queue and attempt to match players.
+        /// This repeats infinitely, either restarting every 5 seconds or after all matchings have been made in the past interation.
+        /// Current implementation only allows for a single game instance, so new players in queue are automatically connected to the same game instance.
         /// </summary>
         public async Task ProcessQueue()
         {
@@ -68,10 +69,32 @@ namespace WebServer.Controller
 
             List<int> playersToMatch = _queue.Keys.ToList();
 
+
             if (playersToMatch.Count > 1)
             {
-                Task matchPlayersTask = HandleMatchedPlayers(playersToMatch);
-                tasks.Add(matchPlayersTask);
+                // If a game instance already exists, add all players to that game instance.
+                int? firstInstanceID;
+
+                using (var scope = _scopeFactory.CreateScope())
+                {
+                    var gameCoordinator = scope.ServiceProvider.GetRequiredService<GameCoordinator>();
+                    firstInstanceID = gameCoordinator.GetGameIDOfFirstInstance();
+                    if (firstInstanceID != null)
+                    {
+                        foreach (int playerID in playersToMatch)
+                        {
+                            Task addPlayerTask = gameCoordinator.AddPlayerToGame(playerID, firstInstanceID.Value);
+                            tasks.Add(addPlayerTask);
+                        }
+                    }
+                }
+
+                // Otherwise, create a new game instance and add all players to it.
+                if (firstInstanceID == null)
+                {
+                    Task matchPlayersTask = HandleMatchedPlayers(playersToMatch);
+                    tasks.Add(matchPlayersTask);
+                }
             }
 
             await Task.WhenAll(tasks);

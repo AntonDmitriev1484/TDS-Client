@@ -1,6 +1,6 @@
 using System;
 
-namespace SharedModels.Game.Actions
+namespace SharedLibrary.Game.Actions
 {
     /// <summary>
     /// Represents the most atomic game action possible. Every change a player makes to the game

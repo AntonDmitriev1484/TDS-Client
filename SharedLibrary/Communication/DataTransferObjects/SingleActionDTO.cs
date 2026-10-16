@@ -1,8 +1,8 @@
+using SharedLibrary.Game.Actions;
+using SharedLibrary.Utilities;
 using System;
-using SharedModels.Game.Actions;
-using SharedModels.Utilities;
 
-namespace SharedModels.WebCommunication.DataTransferObjects
+namespace SharedLibrary.Communication.DataTransferObjects
 {
     /// <summary>
     /// Carries one <see cref="SingleAction"/> between client and server.

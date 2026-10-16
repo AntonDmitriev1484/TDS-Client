@@ -1,9 +1,9 @@
+using SharedLibrary.Communication.DataTransferObjects;
 using System;
 using System.IO;
 using System.Net.Sockets;
 using System.Text;
 using System.Threading;
-using SharedModels.WebCommunication.DataTransferObjects;
 using UnityEngine;
 
 /// <summary>
@@ -17,8 +17,8 @@ public class ServerConnection : MonoBehaviour
 {
     [SerializeField] GameStateManager _client;
 
-    [SerializeField] string _host = "127.0.0.1";
-    [SerializeField] int _port = 7777;
+    [SerializeField] string _host = "";
+    [SerializeField] int _port = 5000;
     [SerializeField] int _playerID = 0;
 
     [Tooltip("Seconds to wait before trying to connect again.")]
@@ -30,14 +30,69 @@ public class ServerConnection : MonoBehaviour
     Thread _connectionThread;
     volatile bool _running;
 
+    [Serializable]
+    class ServerConfig
+    {
+        public string host;
+        public int port;
+        public float reconnectDelay;
+    }
+
     void Awake()
     {
         if (_client == null)
             _client = GetComponent<GameStateManager>();
     }
 
+    /// <summary>
+    /// Attempts to read a JSON config file from StreamingAssets/serverconfig.json and override
+    /// the serialized host/port/playerID/reconnectDelay values if present.
+    /// </summary>
+    void LoadConfigFromStreamingAssets()
+    {
+        try
+        {
+            string configPath = Path.Combine(Application.streamingAssetsPath, "serverconfig.json");
+            if (!File.Exists(configPath))
+            {
+                Debug.Log($"{nameof(ServerConnection)}: no config file at {configPath}; using serialized values.");
+                return;
+            }
+
+            string json = File.ReadAllText(configPath);
+            if (string.IsNullOrWhiteSpace(json))
+            {
+                Debug.LogWarning($"{nameof(ServerConnection)}: config file {configPath} is empty; using serialized values.");
+                return;
+            }
+
+            var cfg = JsonUtility.FromJson<ServerConfig>(json);
+            if (cfg == null)
+            {
+                Debug.LogWarning($"{nameof(ServerConnection)}: failed to parse config file {configPath}; using serialized values.");
+                return;
+            }
+
+            if (!string.IsNullOrEmpty(cfg.host))
+                _host = cfg.host;
+            if (cfg.port != 0)
+                _port = cfg.port;
+            if (cfg.reconnectDelay > 0f)
+                _reconnectDelay = cfg.reconnectDelay;
+
+            Debug.Log($"{nameof(ServerConnection)}: loaded config from {configPath} -> host={_host}, port={_port}, playerID={_playerID}, reconnectDelay={_reconnectDelay}");
+        }
+        catch (Exception ex)
+        {
+            Debug.LogWarning($"{nameof(ServerConnection)}: error reading config: {ex.Message}; using serialized values.");
+        }
+    }
+
     void OnEnable()
     {
+        // Try to load host/port from a config file in StreamingAssets before using serialized values.
+        LoadConfigFromStreamingAssets();
+
         _client.Initialize(_playerID);
         _client.OnOutgoingDTO += SendDTO;
 
@@ -46,7 +101,7 @@ public class ServerConnection : MonoBehaviour
         int port = _port;
         int reconnectDelayMs = Mathf.RoundToInt(_reconnectDelay * 1000);
         _connectionThread = new Thread(() => ConnectionLoop(host, port, reconnectDelayMs))
-            { IsBackground = true, Name = "ServerConnection" };
+        { IsBackground = true, Name = "ServerConnection" };
         _connectionThread.Start();
     }
 
@@ -84,7 +139,6 @@ public class ServerConnection : MonoBehaviour
                     _writer.WriteLine(DTOSerializer.Serialize(new ConnectDTO(_playerID)));
                 }
 
-                Debug.Log($"{nameof(ServerConnection)}: connected to {host}:{port} as player {_playerID}.");
                 loggedWaiting = false;
 
                 using var reader = new StreamReader(stream, Encoding.UTF8);
@@ -153,6 +207,8 @@ public class ServerConnection : MonoBehaviour
             {
                 _tcp?.Close(); // The connection thread notices and reconnects.
             }
+
+            Debug.Log($"{nameof(ServerConnection)}: sent {outgoingDTO.GetType().Name} to server.");
         }
     }
 }

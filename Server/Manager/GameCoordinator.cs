@@ -1,6 +1,6 @@
 ﻿using System.Collections.Concurrent;
 
-namespace WebServer.Manager
+namespace Server.Manager
 {
     /// <summary>
     /// A coordinator for all games going on. Creates games and holds game instances in a dictionary for easy access.
@@ -41,7 +41,6 @@ namespace WebServer.Manager
 
             return newID;
         }
-
 
         /// <summary>
         /// Adds a game manager to this coordinator. Generates a new, unique number game ID for the game.
@@ -100,6 +99,17 @@ namespace WebServer.Manager
 
 
         /// <summary>
+        /// Determines whether a game with the specified ID exists.
+        /// </summary>
+        /// <remarks>Performs a lookup in the internal game instances dictionary.</remarks>
+        /// <param name="gameID">The game identifier to check for existence.</param>
+        /// <returns>true if a game with the specified ID exists; otherwise, false.</returns>
+        public bool GameExists(int gameID)
+        {
+            return _gameInstances.ContainsKey(gameID);
+        }
+
+        /// <summary>
         /// Grab a game from the list of ongoing games.
         /// </summary>
         /// <param name="gameID">The ID of the game to get.</param>
@@ -148,6 +158,44 @@ namespace WebServer.Manager
             {
                 Console.WriteLine($"Error in generating game: {ex.Message}");
             }
+        }
+
+        /// <summary>
+        /// Adds the player with the specified playerID to the game identified by gameID asynchronously.
+        /// </summary>
+        /// <remarks>If the game is not found, a message is written to the console and no player is added.
+        /// The actual add operation is performed by the game's ServerGameStateManager.</remarks>
+        /// <param name="playerID">Identifier of the player to add.</param>
+        /// <param name="gameID">Identifier of the target game.</param>
+        /// <returns>A task that completes when the player has been added to the game.</returns>
+        public async Task AddPlayerToGame(int playerID, int gameID)
+        {
+            ServerGameStateManager? gameStateManager = GetGame(gameID);
+            if (gameStateManager == null)
+            {
+                Console.WriteLine($"Game with ID: {gameID} not found.");
+                return;
+            }
+
+            gameStateManager.AddPlayer(playerID);
+
+            Console.WriteLine($"Player with ID: {playerID} added to game with ID: {gameID}.");
+        }
+
+        /// <summary>
+        /// Gets the ID of the first game instance, or null if no instances are present.
+        /// </summary>
+        /// <remarks>Writes a message to the console when no instances are found. If multiple instances
+        /// exist, the returned ID corresponds to the first element in the collection's enumeration order.</remarks>
+        /// <returns>The ID of the first game instance, or null when no instances exist.</returns>
+        public int? GetGameIDOfFirstInstance()
+        {
+            if (_gameInstances.IsEmpty)
+            {
+                Console.WriteLine("No game instances found.");
+                return null;
+            }
+            return _gameInstances.Keys.First();
         }
     }
 }

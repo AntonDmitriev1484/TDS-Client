@@ -1,9 +1,9 @@
+using SharedLibrary.Communication.DataTransferObjects;
+using SharedLibrary.Game.Actions;
 using System;
 using System.Collections.Generic;
-using SharedModels.Game.Actions;
-using SharedModels.WebCommunication.DataTransferObjects;
 
-namespace SharedModels.Game
+namespace SharedLibrary.Game
 {
     /// <summary>
     /// The game state, held by both the server (authoritative) and each client (a mirror). It owns
@@ -55,7 +55,7 @@ namespace SharedModels.Game
             Cubes.Clear();
             foreach (CubeState cube in cubes)
             {
-                Cubes.Add(cube.Id, cube);
+                Cubes.Add(cube.ID, cube);
                 OnCubeAdded.Invoke(cube);
             }
         }
@@ -70,10 +70,10 @@ namespace SharedModels.Game
 
             foreach (CubeState incoming in gameStateDTO.Cubes)
             {
-                if (!Cubes.TryGetValue(incoming.Id, out CubeState cube))
+                if (!Cubes.TryGetValue(incoming.ID, out CubeState cube))
                 {
                     cube = incoming.GetDeepCopy();
-                    Cubes.Add(cube.Id, cube);
+                    Cubes.Add(cube.ID, cube);
                     OnCubeAdded.Invoke(cube);
                     continue;
                 }

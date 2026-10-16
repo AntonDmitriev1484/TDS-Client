@@ -1,7 +1,7 @@
 ﻿using Newtonsoft.Json;
 using System;
 
-namespace SharedModels.WebCommunication.DataTransferObjects
+namespace SharedLibrary.Communication.DataTransferObjects
 {
     [Serializable]
     public class MessageEnvelope<T>

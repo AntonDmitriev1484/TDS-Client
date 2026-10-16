@@ -1,10 +1,8 @@
 ﻿using Newtonsoft.Json;
 using Server.Manager;
-using SharedModels.WebCommunication.DataTransferObjects;
+using SharedLibrary.Communication.DataTransferObjects;
 using System.Net.WebSockets;
 using System.Text;
-using WebServer.Controller;
-using WebServer.Manager;
 
 namespace Server.Handler
 {
@@ -165,27 +163,11 @@ namespace Server.Handler
 
             if (gameManagerNullable != null && gameManager != null)
             {
-                bool successfulAction = gameManager.GameState.HandleSingleAction(actionDTO.Action);
+                // Enqueue the action to be processed by the authoritative game loop.
+                gameManager.EnqueueSingleAction(actionDTO.Action);
 
-                if (successfulAction == false)
-                {
-                    gameManager.AddOutgoingDTO(playerID, new ResponseDTO(false, "Failed to process the action for player."));
-                    Console.Error.WriteLine("Failed to process the action for player.");
-                    return;
-                }
-
-                // Send info about the action to the other players.
-                foreach (int otherPlayerIDs in gameManager.GameState.PlayerIDs.ToList())
-                {
-                    // Only send this to the other players.
-                    if (otherPlayerIDs != playerID)
-                    {
-                        gameManager.AddOutgoingDTO(otherPlayerIDs, actionDTO);
-                    }
-                }
-
-                // Send to the given web socket that the action was processed successfully.
-                gameManager.AddOutgoingDTO(playerID, new ResponseDTO(true, $"Successfully processed action for player."));
+                // Acknowledge receipt — actual acceptance and broadcasting will occur when the action is processed in the state sync loop.
+                await this.SendObjectAsync(webSocket, new ResponseDTO(true, "Action queued for processing."));
             }
             else
             {

@@ -1,7 +1,7 @@
 using System;
-using System.Numerics;
+// Using local Vector3/Quaternion types in SharedLibrary.Game
 
-namespace SharedModels.Game.Actions
+namespace SharedLibrary.Game.Actions
 {
     /// <summary>
     /// Requests grab permission for a cube. Granted only if no other player holds it.
@@ -46,8 +46,8 @@ namespace SharedModels.Game.Actions
 
         public MoveCubeAction(int playerID, string cubeID, Pose pose) : base(playerID, cubeID)
         {
-            _position = pose.position;
-            _rotation = pose.rotation;
+            _position = pose.Position;
+            _rotation = pose.Rotation;
         }
     }
 }

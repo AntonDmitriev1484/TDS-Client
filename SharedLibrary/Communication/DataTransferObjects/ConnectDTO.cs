@@ -1,6 +1,6 @@
 using System;
 
-namespace SharedModels.WebCommunication.DataTransferObjects
+namespace SharedLibrary.Communication.DataTransferObjects
 {
     /// <summary>
     /// The first message a client sends on a new connection, saying which player it is. Stands in

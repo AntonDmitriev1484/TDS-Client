@@ -1,6 +1,6 @@
 ﻿using Newtonsoft.Json;
 
-namespace SharedModels.WebCommunication.DataTransferObjects
+namespace SharedLibrary.Communication.DataTransferObjects
 {
     public class ResponseDTO
     {

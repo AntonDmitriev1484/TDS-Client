@@ -1,10 +1,10 @@
-using Microsoft.AspNetCore.WebSockets;
 using Server.Handler;
 using Server.Manager;
-using WebServer.Controller;
-using WebServer.Manager;
+using Server.Middleware;
+using SharedLibrary.Communication.Connection;
+using System.Net.WebSockets;
 
-namespace WebServer
+namespace Server
 {
     public class Program
     {
@@ -33,16 +33,23 @@ namespace WebServer
 
             /* Configure custom middlewares */
             // Web socket middleware
-            app.UseMiddleware<WebSocketMiddleware>();
+            app.UseMiddleware<ConnectionMiddleware>();
 
 
             /* Handle server shutdown */
             app.Lifetime.ApplicationStopping.Register(async () =>
             {
-                // Shutdown all open Session RUDP connections
+                // Shutdown all open WebSocket connections via the GameConnectionManager
                 using var scope = app.Services.CreateScope();
-                var webSocketMiddleware = scope.ServiceProvider.GetRequiredService<WebSocketMiddleware>();
-                // await webSocketMiddleware.HandleServerShutdown();
+                var gameConnectionManager = scope.ServiceProvider.GetRequiredService<GameConnectionManager>();
+
+                foreach (var webSocket in gameConnectionManager.GetAllSockets())
+                {
+                    if (webSocket.State == WebSocketState.Open)
+                    {
+                        await ConnectionMiddleware.CloseWebSocket(webSocket, WebSocketCloseStatus.NormalClosure, ConnectionMessages.ServerShutdownMessage);
+                    }
+                }
             });
 
 

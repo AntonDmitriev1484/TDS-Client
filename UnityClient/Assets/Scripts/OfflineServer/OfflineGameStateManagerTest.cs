@@ -1,9 +1,11 @@
-using SharedModels.Game;
 using Assets.Scripts.Utilities;
-using SharedModels.WebCommunication.DataTransferObjects;
+using SharedLibrary.Communication.DataTransferObjects;
+using SharedLibrary.Game;
 using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
+
+using Vector3 = UnityEngine.Vector3;
 
 /// <summary>
 /// <see cref="OfflineGameStateManager"/> plus a scripted test of the client/server sync. The game
@@ -41,21 +43,21 @@ public class OfflineGameStateManagerTest : OfflineGameStateManager
 
         foreach (CubeState cube in GameState.Cubes.Values)
         {
-            if (!cube.IsHeld || _serverMovedCubes.Contains(cube.Id))
+            if (!cube.IsHeld || _serverMovedCubes.Contains(cube.ID))
             {
-                _grabStartTimes.Remove(cube.Id);
+                _grabStartTimes.Remove(cube.ID);
                 continue;
             }
 
-            if (!_grabStartTimes.TryGetValue(cube.Id, out float grabStartTime))
+            if (!_grabStartTimes.TryGetValue(cube.ID, out float grabStartTime))
             {
-                _grabStartTimes[cube.Id] = Time.time;
+                _grabStartTimes[cube.ID] = Time.time;
                 continue;
             }
 
             if (Time.time - grabStartTime >= _holdDuration)
             {
-                _grabStartTimes.Remove(cube.Id);
+                _grabStartTimes.Remove(cube.ID);
                 StartCoroutine(RevokeAndMoveCube(cube));
             }
         }
@@ -67,10 +69,10 @@ public class OfflineGameStateManagerTest : OfflineGameStateManager
     /// </summary>
     IEnumerator RevokeAndMoveCube(CubeState cube)
     {
-        _serverMovedCubes.Add(cube.Id);
-        Debug.Log($"{nameof(OfflineGameStateManagerTest)}: player {cube.HolderPlayerID} held {cube.Id} for {_holdDuration}s; revoking and moving it.");
+        _serverMovedCubes.Add(cube.ID);
+        Debug.Log($"{nameof(OfflineGameStateManagerTest)}: player {cube.HolderPlayerID} held {cube.ID} for {_holdDuration}s; revoking and moving it.");
 
-        GameState.RevokeGrabPermissions(cube.Id);
+        GameState.RevokeGrabPermissions(cube.ID);
         SendGameState();
 
         Vector3 startPosition = Conversions.ToUnityPosition(cube.Pose);
@@ -84,9 +86,9 @@ public class OfflineGameStateManagerTest : OfflineGameStateManager
             bool finished = elapsed >= _moveDuration;
 
             // The server keeps the cube for the whole move, even if the player grabs it again.
-            GameState.RevokeGrabPermissions(cube.Id);
+            GameState.RevokeGrabPermissions(cube.ID);
 
-            cube.Position = Conversions.ToSharedPosition(startPosition + direction * (_moveSpeed * elapsed));
+            cube.Pose.Position = Conversions.ToSharedPosition(startPosition + direction * (_moveSpeed * elapsed));
 
             if (finished || Time.time >= nextSendTime)
             {
@@ -100,8 +102,8 @@ public class OfflineGameStateManagerTest : OfflineGameStateManager
             yield return null;
         }
 
-        _serverMovedCubes.Remove(cube.Id);
-        Debug.Log($"{nameof(OfflineGameStateManagerTest)}: finished moving {cube.Id}; it can be grabbed again.");
+        _serverMovedCubes.Remove(cube.ID);
+        Debug.Log($"{nameof(OfflineGameStateManagerTest)}: finished moving {cube.ID}; it can be grabbed again.");
     }
 
     void SendGameState()

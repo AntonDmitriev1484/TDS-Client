@@ -1,10 +1,13 @@
 using Assets.Scripts.Utilities;
-using SharedModels.Game;
-using SharedModels.Game.Actions;
-using SharedModels.WebCommunication.DataTransferObjects;
+using SharedLibrary.Communication.DataTransferObjects;
+using SharedLibrary.Game;
+using SharedLibrary.Game.Actions;
 using System;
 using System.Collections.Concurrent;
 using UnityEngine;
+
+using Quaternion = UnityEngine.Quaternion;
+using Vector3 = UnityEngine.Vector3;
 
 /// <summary>
 /// Manages the game state from the client's side. Keeps a non-authoritative
@@ -92,6 +95,7 @@ public class GameStateManager : MonoBehaviour
 
     void HandleIncomingMessage(object objDTO)
     {
+
         if (objDTO is GameStateDTO gameStateDTO)
         {
             GameState.ApplyGameState(gameStateDTO);
@@ -114,7 +118,7 @@ public class GameStateManager : MonoBehaviour
 
     void HandleCubeAdded(CubeState state)
     {
-        _cubeManager.SpawnCube(Conversions.ToUnityPose(state.Pose), state.Id);
+        _cubeManager.SpawnCube(Conversions.ToUnityPose(state.Pose), state.ID);
         HandleGrabPermissionsChanged(state);
     }
 
@@ -124,7 +128,7 @@ public class GameStateManager : MonoBehaviour
     /// </summary>
     void HandleGrabPermissionsChanged(CubeState state)
     {
-        if (!_cubeManager.TryGetCube(state.Id, out var cube))
+        if (!_cubeManager.TryGetCube(state.ID, out var cube))
             return;
 
         if (!state.HasGrabPermission(LocalPlayerID))
@@ -137,7 +141,7 @@ public class GameStateManager : MonoBehaviour
     void HandleCubePoseChanged(CubeState state)
     {
         // A cube following one of our hands is already where it should be.
-        if (!_cubeManager.TryGetCube(state.Id, out var cube) || cube.FollowTarget != null)
+        if (!_cubeManager.TryGetCube(state.ID, out var cube) || cube.FollowTarget != null)
             return;
 
         cube.transform.SetPositionAndRotation(Conversions.ToUnityPosition(state.Pose), Conversions.ToUnityRotation(state.Pose));
@@ -149,8 +153,17 @@ public class GameStateManager : MonoBehaviour
 
     void OnPinchStarted(GrabbableCube cube, OVRHand hand)
     {
+        Debug.Log("OnPinchStarted: " + cube.Id + " by hand: " + hand.name);
+        Debug.Log("Number of players in Cube: " + this.GameState.Cubes[cube.Id].GrabPermissions.Keys.Count);
+        foreach (var kvp in this.GameState.Cubes[cube.Id].GrabPermissions)
+        {
+            Debug.Log($"Grab permissions for cube {cube.Id}: player {kvp.Key} = {kvp.Value}");
+        }
+
         if (HandleOurAction(new GrabCubeAction(LocalPlayerID, cube.Id)))
             cube.Grab(hand.transform);
+        else
+            Debug.LogWarning($"Failed to grab cube {cube.Id} (possibly because we don't have permission).");
     }
 
     void OnPinchEnded(GrabbableCube cube, OVRHand hand)
