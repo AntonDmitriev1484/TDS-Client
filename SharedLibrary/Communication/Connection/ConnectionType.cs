@@ -4,7 +4,7 @@ namespace SharedLibrary.Communication.Connection
 {
     public enum ConnectionType
     {
-        Application,
+        Game,
     }
 
     public static class ConnectionTypeExtensions
@@ -15,13 +15,13 @@ namespace SharedLibrary.Communication.Connection
         {
             return connectionType switch
             {
-                ConnectionType.Application => APICallEndpoint + "/app",
+                ConnectionType.Game => APICallEndpoint + "/game",
                 _ => throw new ArgumentOutOfRangeException(nameof(connectionType), connectionType, null)
             };
         }
 
         public static string TestConnectionEndpoint = APICallEndpoint + "/test-connection";
-        public static string QueueApplicationEndpoint = APICallEndpoint + "/queue";
+        public static string LoginPlayerEndpoint = APICallEndpoint + "/login";
 
     }
 }

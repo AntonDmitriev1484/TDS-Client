@@ -1,5 +1,7 @@
 {
-  "host": "172.16.37.67",
+  "host": "172.16.105.199",
   "port": 5000,
-  "reconnectDelay": 1.0
+  "reconnectDelay": 1.0,
+  "username": "Chitty",
+  "password": "ChittyPassword"
 }

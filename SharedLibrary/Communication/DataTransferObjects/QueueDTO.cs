@@ -3,20 +3,19 @@ using System;
 namespace SharedLibrary.Communication.DataTransferObjects
 {
     /// <summary>
-    /// The first message a client sends on a new connection, saying which player it is. Stands in
-    /// for the player ID the real server takes from the WebSocket request.
+    /// A DTO for request to join queue by client.
     /// </summary>
     [Serializable]
-    public class ConnectDTO
+    public class QueueDTO
     {
         public int PlayerID;
 
         /// <summary>
         /// Parameterless constructor for JSON deserialization between server and client.
         /// </summary>
-        public ConnectDTO() { }
+        public QueueDTO() { }
 
-        public ConnectDTO(int playerID)
+        public QueueDTO(int playerID)
         {
             PlayerID = playerID;
         }

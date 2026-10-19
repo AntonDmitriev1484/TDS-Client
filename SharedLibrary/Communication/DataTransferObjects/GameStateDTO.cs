@@ -11,6 +11,7 @@ namespace SharedLibrary.Communication.DataTransferObjects
     [Serializable]
     public class GameStateDTO
     {
+        public float ServerTime;
         public List<int> PlayerIDs = new List<int>();
         public List<CubeState> Cubes = new List<CubeState>();
 
@@ -19,8 +20,9 @@ namespace SharedLibrary.Communication.DataTransferObjects
         /// </summary>
         public GameStateDTO() { }
 
-        public GameStateDTO(GameState gameState)
+        public GameStateDTO(float serverTime, GameState gameState)
         {
+            ServerTime = serverTime;
             PlayerIDs.AddRange(gameState.PlayerIDs);
 
             foreach (CubeState cube in gameState.Cubes.Values)

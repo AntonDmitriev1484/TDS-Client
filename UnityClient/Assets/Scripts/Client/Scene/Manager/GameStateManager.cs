@@ -1,0 +1,269 @@
+using Assets.Scripts.Utilities;
+using Client.Communication.Manager;
+using SharedLibrary.Communication.Connection;
+using SharedLibrary.Communication.DataTransferObjects;
+using SharedLibrary.Game;
+using SharedLibrary.Game.Actions;
+using System;
+using System.Collections;
+using System.Collections.Concurrent;
+using UnityEngine;
+using UnityEngine.Events;
+using Quaternion = UnityEngine.Quaternion;
+using Vector3 = UnityEngine.Vector3;
+
+
+namespace Client.Scene.Manager
+{
+    /// <summary>
+    /// Manages the game state from the client's side. Keeps a non-authoritative
+    /// <see cref="GameState"/> in sync with the server and makes the scene reflect it.
+    ///
+    /// Our hand input (pinches from <see cref="GrabbableCubeManager"/>) becomes a
+    /// <see cref="SingleAction"/> that is applied locally straight away and then sent to the server
+    /// through <see cref="OnOutgoingDTO"/>. If the server disagrees, it answers with a
+    /// <see cref="GameStateDTO"/>, and any cube we no longer have grab permission for is dropped.
+    /// </summary>
+    public class GameStateManager : MonoBehaviour
+    {
+        [SerializeField] GrabbableCubeManager _cubeManager;
+
+        [Tooltip("Minimum seconds between pose updates sent for a cube we are holding.")]
+        [SerializeField] float _poseSendInterval = 0.05f;
+
+        [Tooltip("A held cube must move or turn at least this much before a new pose is sent (meters / degrees).")]
+        [SerializeField] float _poseSendThreshold = 0.001f;
+
+        // DTOs arrive on the WebSocket thread; enqueued here and applied on the main thread in Update.
+        readonly ConcurrentQueue<object> _incomingMessages = new ConcurrentQueue<object>();
+        float _nextPoseSendTime;
+
+        // Estimated latency between the client and server.
+        float _estimatedLatency = 0.0f;
+
+        public GameState GameState { get; private set; }
+
+        public int LocalPlayerID { get; private set; } = -1;
+
+        /// <summary>
+        /// Raised with every DTO this client sends to the server. Whatever carries messages to the
+        /// server (<see cref="ServerConnection"/>) subscribes to it.
+        /// </summary>
+        public event Action<object> OnOutgoingDTO;
+
+        #region Unity Functions
+
+        void Awake()
+        {
+            if (_cubeManager == null)
+                _cubeManager = GetComponent<GrabbableCubeManager>();
+            if (_cubeManager == null)
+                _cubeManager = FindFirstObjectByType<GrabbableCubeManager>();
+
+            GameState = new GameState(isAuthoritative: false);
+            GameState.OnCubeAdded += HandleCubeAdded;
+            GameState.OnGrabPermissionsChanged += HandleGrabPermissionsChanged;
+            GameState.OnCubePoseChanged += HandleCubePoseChanged;
+        }
+
+        void OnEnable()
+        {
+            _cubeManager.PinchStarted += OnPinchStarted;
+            _cubeManager.PinchEnded += OnPinchEnded;
+        }
+
+        void OnDisable()
+        {
+            _cubeManager.PinchStarted -= OnPinchStarted;
+            _cubeManager.PinchEnded -= OnPinchEnded;
+        }
+
+        IEnumerator Start()
+        {
+            // Wait for ConnectionManager to finish initializing before subscribing to its events.
+            while (ConnectionManager.Instance == null || !ConnectionManager.Instance.IsInitialized)
+                yield return null;
+
+            var cm = ConnectionManager.Instance;
+            if (cm.InboundMessagesDict.TryGetValue(typeof(GameStateDTO), out var gsEvent))
+                ((UnityEvent<GameStateDTO>)gsEvent).AddListener(OnGameStateDTOReceived);
+            if (cm.InboundMessagesDict.TryGetValue(typeof(SingleActionDTO), out var saEvent))
+                ((UnityEvent<SingleActionDTO>)saEvent).AddListener(OnSingleActionDTOReceived);
+        }
+
+        void OnDestroy()
+        {
+            var cm = ConnectionManager.Instance;
+            if (cm == null || cm.InboundMessagesDict == null) return;
+
+            if (cm.InboundMessagesDict.TryGetValue(typeof(GameStateDTO), out var gsEvent))
+                ((UnityEvent<GameStateDTO>)gsEvent).RemoveListener(OnGameStateDTOReceived);
+            if (cm.InboundMessagesDict.TryGetValue(typeof(SingleActionDTO), out var saEvent))
+                ((UnityEvent<SingleActionDTO>)saEvent).RemoveListener(OnSingleActionDTOReceived);
+        }
+
+        void Update()
+        {
+            while (_incomingMessages.TryDequeue(out var message))
+                HandleIncomingMessage(message);
+        }
+
+        void LateUpdate()
+        {
+            SendHeldCubePoses();
+        }
+
+        #endregion Unity Functions
+
+        /// <summary>Sets which player this client acts for. Call before the first game state arrives.</summary>
+        public void Initialize(int localPlayerID)
+        {
+            LocalPlayerID = localPlayerID;
+        }
+
+        #region Handle Incoming Events
+
+        // Called on the WebSocket thread — only enqueue; all Unity API calls happen in Update.
+        void OnGameStateDTOReceived(GameStateDTO dto) => _incomingMessages.Enqueue(dto);
+        void OnSingleActionDTOReceived(SingleActionDTO dto) => _incomingMessages.Enqueue(dto);
+
+        void HandleIncomingMessage(object objDTO)
+        {
+
+            if (objDTO is GameStateDTO gameStateDTO)
+            {
+                GameState.ApplyGameState(_estimatedLatency, gameStateDTO);
+            }
+            else if (objDTO is SingleActionDTO singleActionDTO)
+            {
+                // The server already accepted this action, so a rejection here means we are out of sync.
+                if (!GameState.HandleSingleAction(singleActionDTO.Action))
+                    Debug.LogWarning($"{nameof(GameStateManager)}: server action rejected locally: {singleActionDTO.Action.FormatActionText()}");
+            }
+            else
+            {
+                Debug.LogError($"{nameof(GameStateManager)}: incoming message of type {objDTO.GetType().Name} was never handled!");
+            }
+        }
+
+        #endregion Handle Incoming Events
+
+        #region Handle Game Master Events
+
+        void HandleCubeAdded(CubeState state)
+        {
+            _cubeManager.SpawnCube(Conversions.ToUnityPose(state.Pose), state.ID);
+            HandleGrabPermissionsChanged(state);
+        }
+
+        /// <summary>
+        /// Makes the cube's grabbed state match its permissions. If our own entry isn't true, the cube
+        /// is dropped even if we are still pinching it.
+        /// </summary>
+        void HandleGrabPermissionsChanged(CubeState state)
+        {
+            if (!_cubeManager.TryGetCube(state.ID, out var cube))
+                return;
+
+            if (!state.HasGrabPermission(LocalPlayerID))
+                cube.Grabbed = false; // Forgets the hand, so the cube stops following it.
+
+            // Still shown as grabbed (without following anything) while another player holds it.
+            cube.Grabbed = state.IsHeld;
+        }
+
+        void HandleCubePoseChanged(CubeState state)
+        {
+            // A cube following one of our hands is already where it should be.
+            if (!_cubeManager.TryGetCube(state.ID, out var cube) || cube.FollowTarget != null)
+                return;
+
+            cube.transform.SetPositionAndRotation(Conversions.ToUnityPosition(state.Pose), Conversions.ToUnityRotation(state.Pose));
+        }
+
+        #endregion Handle Game Master Events
+
+        #region Handle Our Actions
+
+        void OnPinchStarted(GrabbableCube cube, OVRHand hand)
+        {
+            Debug.Log("OnPinchStarted: " + cube.Id + " by hand: " + hand.name);
+            Debug.Log("Number of players in Cube: " + this.GameState.Cubes[cube.Id].GrabPermissions.Keys.Count);
+            foreach (var kvp in this.GameState.Cubes[cube.Id].GrabPermissions)
+            {
+                Debug.Log($"Grab permissions for cube {cube.Id}: player {kvp.Key} = {kvp.Value}");
+            }
+
+            if (HandleOurAction(new GrabCubeAction(LocalPlayerID, cube.Id)))
+                cube.Grab(hand.transform);
+            else
+                Debug.LogWarning($"Failed to grab cube {cube.Id} (possibly because we don't have permission).");
+        }
+
+        void OnPinchEnded(GrabbableCube cube, OVRHand hand)
+        {
+            // Ignore a hand letting go of a cube that the other hand has since taken over, or that
+            // was already dropped because we lost permission.
+            if (cube.FollowTarget != hand.transform)
+                return;
+
+            HandleOurAction(new ReleaseCubeAction(LocalPlayerID, cube.Id));
+        }
+
+        /// <summary>Sends the pose of every cube one of our hands is carrying, throttled.</summary>
+        void SendHeldCubePoses()
+        {
+            if (Time.time < _nextPoseSendTime)
+                return;
+            _nextPoseSendTime = Time.time + _poseSendInterval;
+
+            foreach (var cube in _cubeManager.Cubes.Values)
+            {
+                if (cube.FollowTarget == null || !GameState.Cubes.TryGetValue(cube.Id, out var state))
+                    continue;
+
+
+
+                Transform t = cube.transform;
+                if (Vector3.Distance(t.position, Conversions.ToUnityPosition(state.Pose)) < _poseSendThreshold &&
+                    Quaternion.Angle(t.rotation, Conversions.ToUnityRotation(state.Pose)) < _poseSendThreshold)
+                    continue;
+
+                HandleOurAction(new MoveCubeAction(LocalPlayerID, cube.Id, Conversions.ToSharedPose(t.position, t.rotation)));
+            }
+        }
+
+        /// <summary>
+        /// Applies one of our actions to the local game state and, if it is accepted, sends it to the server.
+        /// </summary>
+        /// <returns>True if the action was accepted locally.</returns>
+        bool HandleOurAction(SingleAction singleAction)
+        {
+            if (!GameState.HandleSingleAction(singleAction))
+                return false;
+
+            var dto = new SingleActionDTO(singleAction);
+
+            // Raise legacy event for any subscribers (e.g., ServerConnection)
+            OnOutgoingDTO?.Invoke(dto);
+
+            // If the ConnectionManager is available, send via it as well.
+            try
+            {
+                var cm = ConnectionManager.Instance;
+                if (cm != null)
+                {
+                    // Fire-and-forget send; do not await on the network thread here.
+                    _ = cm.SendDTO(ConnectionType.Game, dto);
+                }
+            }
+            catch (Exception ex)
+            {
+                Debug.LogWarning($"{nameof(GameStateManager)}: failed to send DTO via ConnectionManager: {ex.Message}");
+            }
+            return true;
+        }
+
+        #endregion Handle Our Actions
+    }
+}

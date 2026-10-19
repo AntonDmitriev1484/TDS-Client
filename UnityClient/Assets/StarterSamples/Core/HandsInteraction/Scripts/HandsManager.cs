@@ -1,10 +1,9 @@
 // Copyright (c) Meta Platforms, Inc. and affiliates.
 
 
+using Meta.XR.Samples;
 using System.Collections;
 using System.Collections.Generic;
-using System.Linq;
-using Meta.XR.Samples;
 using UnityEngine;
 using UnityEngine.Assertions;
 
@@ -131,22 +130,22 @@ namespace OculusSampleFramework
 
         private void Update()
         {
-            switch (VisualMode)
-            {
-                case HandsVisualMode.Mesh:
-                case HandsVisualMode.Skeleton:
-                    _currentHandAlpha = 1.0f;
-                    break;
-                case HandsVisualMode.Both:
-                    _currentHandAlpha = 0.6f;
-                    break;
-                default:
-                    _currentHandAlpha = 1.0f;
-                    break;
-            }
+            //switch (VisualMode)
+            //{
+            //    case HandsVisualMode.Mesh:
+            //    case HandsVisualMode.Skeleton:
+            //        _currentHandAlpha = 1.0f;
+            //        break;
+            //    case HandsVisualMode.Both:
+            //        _currentHandAlpha = 0.6f;
+            //        break;
+            //    default:
+            //        _currentHandAlpha = 1.0f;
+            //        break;
+            //}
 
-            _rightMeshRenderer.sharedMaterial.SetFloat(HandAlphaId, _currentHandAlpha);
-            _leftMeshRenderer.sharedMaterial.SetFloat(HandAlphaId, _currentHandAlpha);
+            //_rightMeshRenderer.sharedMaterial.SetFloat(HandAlphaId, _currentHandAlpha);
+            //_leftMeshRenderer.sharedMaterial.SetFloat(HandAlphaId, _currentHandAlpha);
         }
 
         private IEnumerator FindSkeletonVisualGameObjects()

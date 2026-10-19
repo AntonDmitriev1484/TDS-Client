@@ -1,6 +1,8 @@
 using Assets.Scripts.Utilities;
+using Client.Scene.Manager;
 using SharedLibrary.Communication.DataTransferObjects;
 using SharedLibrary.Game;
+using SharedLibrary.Utilities;
 using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
@@ -45,6 +47,7 @@ public class OfflineGameStateManager : MonoBehaviour
 
     /// <summary>The authoritative game state; null until the game starts.</summary>
     public GameState GameState { get; private set; }
+    public float ServerTime => TimeUtilities.GetTime();
 
     #region Unity Functions
 
@@ -57,7 +60,6 @@ public class OfflineGameStateManager : MonoBehaviour
         // them; they talk to this server only through the socket. The state manager goes first,
         // because the connection looks it up when added.
         GetOrAddComponent<GameStateManager>();
-        GetOrAddComponent<ServerConnection>();
     }
 
     IEnumerator Start()
@@ -144,7 +146,7 @@ public class OfflineGameStateManager : MonoBehaviour
     {
         if (GameState != null)
         {
-            AddOutgoingDTO(playerID, new GameStateDTO(GameState));
+            AddOutgoingDTO(playerID, new GameStateDTO(ServerTime, GameState));
         }
     }
 
@@ -183,7 +185,7 @@ public class OfflineGameStateManager : MonoBehaviour
     void BroadcastGameState()
     {
         foreach (int playerID in GetPlayerIDs())
-            AddOutgoingDTO(playerID, new GameStateDTO(GameState));
+            AddOutgoingDTO(playerID, new GameStateDTO(ServerTime, GameState));
     }
 
     #endregion Process DTOs

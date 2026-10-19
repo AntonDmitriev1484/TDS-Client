@@ -70,7 +70,7 @@ namespace Server.Manager
             List<int> playersToMatch = _queue.Keys.ToList();
 
 
-            if (playersToMatch.Count > 1)
+            if (playersToMatch.Count > 0)
             {
                 // If a game instance already exists, add all players to that game instance.
                 int? firstInstanceID;

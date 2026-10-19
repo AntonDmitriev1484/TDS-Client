@@ -148,10 +148,9 @@ namespace Server.Manager
         /// <returns>The manager for the generated game instance.</returns>
         public async Task GenerateGame(List<int> playerIDs)
         {
-            ServerGameStateManager gameStateManager = new ServerGameStateManager(_scopeFactory, playerIDs);
-
             try
             {
+                ServerGameStateManager gameStateManager = new ServerGameStateManager(_scopeFactory, playerIDs);
                 return;
             }
             catch (Exception ex)

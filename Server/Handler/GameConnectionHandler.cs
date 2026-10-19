@@ -109,7 +109,31 @@ namespace Server.Handler
             try
             {
                 // Handle the message based on its type
-                if (typeString == typeof(SingleActionDTO).Name)
+                if (typeString == typeof(QueueDTO).Name)
+                {
+                    QueueDTO queueDTO = data.ToObject<QueueDTO>();
+
+                    if (queueDTO.PlayerID != playerID)
+                    {
+                        await this.SendObjectAsync(webSocket, new ResponseDTO(false, "DTO's player ID does not match the web socket's player ID."));
+                        return;
+                    }
+
+                    await ProcessQueueAsync(webSocket, playerID, queueDTO);
+                }
+                else if (typeString == typeof(DequeueDTO).Name)
+                {
+                    DequeueDTO dequeueDTO = data.ToObject<DequeueDTO>();
+
+                    if (dequeueDTO.PlayerID != playerID)
+                    {
+                        await this.SendObjectAsync(webSocket, new ResponseDTO(false, "DTO's player ID does not match the web socket's player ID."));
+                        return;
+                    }
+
+                    await ProcessDequeueAsync(webSocket, playerID, dequeueDTO);
+                }
+                else if (typeString == typeof(SingleActionDTO).Name)
                 {
                     // Cast to correct type
                     SingleActionDTO actionDTO = data.ToObject<SingleActionDTO>();
@@ -177,7 +201,6 @@ namespace Server.Handler
             }
         }
 
-        /* **TODO** Handle Queueing.
         /// <summary>
         /// Processes an incoming queue DTO. Send a success/error if the queue game DTO is accepted.
         /// </summary>
@@ -185,7 +208,7 @@ namespace Server.Handler
         /// <param name="playerID">The player's ID.</param>
         /// <param name="queueDTO">The queue DTO.</param>
         /// <returns></returns>
-        private async Task ProcessQueueAsync(WebSocket webSocket, int playerID, DTOInterfaces.IQueueDTO queueDTO)
+        private async Task ProcessQueueAsync(WebSocket webSocket, int playerID, QueueDTO queueDTO)
         {
             bool? successfulAction;
 
@@ -193,23 +216,10 @@ namespace Server.Handler
             {
                 var queueManager = scope.ServiceProvider.GetRequiredService<QueueManager>();
 
-                // Handle if request is to enter queue.
-                if (queueDTO is QueueApplicationDTO queueApplicationDTO)
-                {
-                    Console.WriteLine($"\nQueue application for:\nPlayer ID: {playerID}\nApplicationType: {queueApplicationDTO.ApplicationType}\n");
-                    successfulAction = await queueManager.EnqueuePlayer(playerID);
-                }
-                // Handle if request is to leave queue.
-                else if (queueDTO is DequeueApplicationDTO dequeueApplicationDTO)
-                {
-                    Console.WriteLine($"\nDequeue application for:\nPlayer ID: {playerID}\n");
-                    queueManager.DequeuePlayer(playerID);
-                    successfulAction = true;
-                }
-                else
-                {
-                    successfulAction = false;
-                }
+                // Handle request to enter queue.
+                Console.WriteLine($"\nQueue game for:\nPlayer ID: {playerID}\n");
+                successfulAction = queueManager.EnqueuePlayer(playerID);
+
             }
 
             if (successfulAction == null || successfulAction == false)
@@ -223,7 +233,32 @@ namespace Server.Handler
             await this.SendObjectAsync(webSocket, new ResponseDTO(true, "Successfully processed queue DTO for player."));
             Console.Error.WriteLine("Successfully processed queue DTO for player.");
             return;
-        } */
+        }
+
+        /// <summary>
+        /// Processes an incoming queue DTO. Send a success/error if the queue game DTO is accepted.
+        /// </summary>
+        /// <param name="webSocket">The web socket that received the queue game DTO.</param>
+        /// <param name="playerID">The player's ID.</param>
+        /// <param name="dequeueDTO">The dequeue DTO.</param>
+        /// <returns></returns>
+        private async Task ProcessDequeueAsync(WebSocket webSocket, int playerID, DequeueDTO dequeueDTO)
+        {
+            bool? successfulAction;
+
+            using (var scope = _scopeFactory.CreateScope())
+            {
+                var queueManager = scope.ServiceProvider.GetRequiredService<QueueManager>();
+
+                // Handle request to leave queue.
+                Console.WriteLine($"\nDequeue game for:\nPlayer ID: {playerID}\n");
+                queueManager.DequeuePlayer(playerID);
+            }
+
+            await this.SendObjectAsync(webSocket, new ResponseDTO(true, "Successfully processed queue DTO for player."));
+            Console.Error.WriteLine("Successfully processed queue DTO for player.");
+            return;
+        }
 
         #endregion Handle DTOs
 

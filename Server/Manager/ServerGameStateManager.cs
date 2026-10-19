@@ -2,6 +2,7 @@ using Server.Handler;
 using SharedLibrary.Communication.DataTransferObjects;
 using SharedLibrary.Game;
 using SharedLibrary.Game.Actions;
+using SharedLibrary.Utilities;
 using System.Collections.Concurrent;
 
 /// <summary>
@@ -25,8 +26,8 @@ namespace Server.Manager
         float _cubeGap = 0.25f;
 
         // Tick rate (updates per second) and corresponding interval (seconds per update).
-        private float _tickRate = 15.625f;
-        private float _tickInterval = 1.0f / 15.625f;
+        private float _tickRate = 30;
+        private float _tickInterval = 1.0f / 30;
 
         public float TickRate
         {
@@ -40,6 +41,8 @@ namespace Server.Manager
         }
 
         public float TickInterval => _tickInterval;
+
+        public float ServerTime => TimeUtilities.GetTime();
 
         /// <summary>The authoritative game state; null until the game starts.</summary>
         public GameState GameState { get; private set; }
@@ -161,7 +164,7 @@ namespace Server.Manager
         public void OnPlayerConnected(int playerID)
         {
             if (GameState != null)
-                this.AddOutgoingDTO(playerID, new GameStateDTO(GameState));
+                this.AddOutgoingDTO(playerID, new GameStateDTO(ServerTime, GameState));
         }
 
         /// <summary>
@@ -284,7 +287,7 @@ namespace Server.Manager
         void BroadcastGameState()
         {
             foreach (int playerID in GameState.PlayerIDs)
-                this.AddOutgoingDTO(playerID, new GameStateDTO(GameState));
+                this.AddOutgoingDTO(playerID, new GameStateDTO(ServerTime, GameState));
         }
 
         public async Task<bool> AddOutgoingDTO(int playerID, object obj)

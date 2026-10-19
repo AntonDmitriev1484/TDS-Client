@@ -28,7 +28,8 @@ namespace SharedLibrary.Communication.DataTransferObjects
 
             switch (envelope.type)
             {
-                case nameof(ConnectDTO): return JsonUtilities.FromJson<ConnectDTO>(envelope.data);
+                case nameof(QueueDTO): return JsonUtilities.FromJson<QueueDTO>(envelope.data);
+                case nameof(DequeueDTO): return JsonUtilities.FromJson<DequeueDTO>(envelope.data);
                 case nameof(SingleActionDTO): return JsonUtilities.FromJson<SingleActionDTO>(envelope.data);
                 case nameof(GameStateDTO): return JsonUtilities.FromJson<GameStateDTO>(envelope.data);
                 default: throw new ArgumentException($"Unknown DTO type '{envelope.type}'.", nameof(json));

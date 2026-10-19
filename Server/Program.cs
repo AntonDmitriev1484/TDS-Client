@@ -21,7 +21,7 @@ namespace Server
             builder.Services.AddSingleton<GameCoordinator>();
 
             // Read the URL from appsettings.json
-            var webServerUrl = builder.Configuration["WebServer:Url"] ?? "http://localhost:5000";
+            var webServerUrl = builder.Configuration["WebServer:Url"] ?? "https://localhost:5000";
             Console.WriteLine($"Web server url: {webServerUrl}");
             builder.WebHost.UseUrls(webServerUrl);
 

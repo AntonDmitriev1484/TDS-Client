@@ -1,3 +1,4 @@
+using Client.Communication.Config;
 using SharedLibrary.Communication.DataTransferObjects;
 using SharedLibrary.Game;
 using System;
@@ -17,7 +18,7 @@ using UnityEngine;
 /// map and does the sending, which the server splits out into WebSocketConnectionManager.
 ///
 /// Players connect over TCP and exchange newline-delimited JSON (one <see cref="DTOSerializer"/>
-/// message per line). The first message on a connection must be a <see cref="ConnectDTO"/>.
+/// message per line). The first message on a connection must be a <see cref="QueueDTO"/>.
 ///
 /// Sockets are read on background threads; every message is handled on the main thread in Update.
 /// </summary>
@@ -31,7 +32,7 @@ public class MessageHandler : MonoBehaviour
     {
         public TcpClient Client;
         public StreamWriter Writer;
-        public int PlayerID = -1; // Unknown until its ConnectDTO arrives.
+        public int PlayerID = -1; // Unknown until its QueueDTO arrives.
     }
 
     // A null message means the connection closed.
@@ -44,12 +45,7 @@ public class MessageHandler : MonoBehaviour
     Thread _acceptThread;
     volatile bool _listening;
 
-    [Serializable]
-    class ServerConfig
-    {
-        public string host;
-        public int port;
-    }
+    // Configuration is provided by ServerConfig singleton (StreamingAssets)
 
     #region Unity Functions
 
@@ -61,7 +57,6 @@ public class MessageHandler : MonoBehaviour
 
     void OnEnable()
     {
-        LoadConfigFromStreamingAssets();
         StartListening();
     }
 
@@ -90,16 +85,21 @@ public class MessageHandler : MonoBehaviour
     {
         try
         {
+            // Allow ServerConfig to override inspector values
+            var cfg = ServerConfig.Instance;
+            string bindHost = !string.IsNullOrEmpty(cfg.Host) ? cfg.Host : _host;
+            int bindPort = cfg.Port != 0 ? cfg.Port : _port;
+
             IPAddress bindAddr = IPAddress.Any;
-            if (!string.IsNullOrEmpty(_host))
+            if (!string.IsNullOrEmpty(bindHost))
             {
-                if (!IPAddress.TryParse(_host, out bindAddr))
+                if (!IPAddress.TryParse(bindHost, out bindAddr))
                 {
-                    Debug.LogWarning($"{nameof(MessageHandler)}: invalid host '{_host}'; falling back to Any.");
+                    Debug.LogWarning($"{nameof(MessageHandler)}: invalid host '{bindHost}'; falling back to Any.");
                     bindAddr = IPAddress.Any;
                 }
             }
-            _listener = new TcpListener(bindAddr, _port);
+            _listener = new TcpListener(bindAddr, bindPort);
             _listener.Start();
         }
         catch (SocketException e)
@@ -140,10 +140,10 @@ public class MessageHandler : MonoBehaviour
                 return;
             }
 
-            if (!string.IsNullOrEmpty(cfg.host))
-                _host = cfg.host;
-            if (cfg.port != 0)
-                _port = cfg.port;
+            if (!string.IsNullOrEmpty(cfg.Host))
+                _host = cfg.Host;
+            if (cfg.Port != 0)
+                _port = cfg.Port;
 
             Debug.Log($"{nameof(MessageHandler)}: loaded config from {configPath} -> host={_host}, port={_port}");
         }
@@ -221,13 +221,13 @@ public class MessageHandler : MonoBehaviour
         }
     }
 
-    void HandleConnect(Connection connection, ConnectDTO connectDTO)
+    void HandleConnect(Connection connection, QueueDTO queueDTO)
     {
-        int playerID = connectDTO.PlayerID;
+        int playerID = queueDTO.PlayerID;
 
         if (connection.PlayerID >= 0)
         {
-            Debug.LogWarning($"{nameof(MessageHandler)}: player {connection.PlayerID} sent a second ConnectDTO.");
+            Debug.LogWarning($"{nameof(MessageHandler)}: player {connection.PlayerID} sent a second QueueDTO.");
             return;
         }
 
@@ -284,15 +284,15 @@ public class MessageHandler : MonoBehaviour
             return;
         }
 
-        if (objDTO is ConnectDTO connectDTO)
+        if (objDTO is QueueDTO queueDTO)
         {
-            HandleConnect(connection, connectDTO);
+            HandleConnect(connection, queueDTO);
             return;
         }
 
         if (connection.PlayerID < 0)
         {
-            Debug.LogWarning($"{nameof(MessageHandler)}: {objDTO.GetType().Name} arrived before the connection's ConnectDTO.");
+            Debug.LogWarning($"{nameof(MessageHandler)}: {objDTO.GetType().Name} arrived before the connection's QueueDTO.");
             return;
         }
 
@@ -311,6 +311,7 @@ public class MessageHandler : MonoBehaviour
     void ProcessSingleAction(int playerID, SingleActionDTO actionDTO)
     {
         GameState gameState = _gameStateManager.GameState;
+        float serverTime = _gameStateManager.ServerTime;
 
         if (gameState == null)
         {
@@ -321,14 +322,14 @@ public class MessageHandler : MonoBehaviour
         if (actionDTO.Action.PlayerID != playerID)
         {
             Debug.LogWarning($"{nameof(MessageHandler)}: DTO's player ID does not match the connection's player ID.");
-            _gameStateManager.AddOutgoingDTO(playerID, new GameStateDTO(gameState));
+            _gameStateManager.AddOutgoingDTO(playerID, new GameStateDTO(serverTime, gameState));
             return;
         }
 
         if (!gameState.HandleSingleAction(actionDTO.Action))
         {
             Debug.Log($"{nameof(MessageHandler)}: rejected {actionDTO.Action.FormatActionText()}");
-            _gameStateManager.AddOutgoingDTO(playerID, new GameStateDTO(gameState));
+            _gameStateManager.AddOutgoingDTO(playerID, new GameStateDTO(serverTime, gameState));
             return;
         }
 

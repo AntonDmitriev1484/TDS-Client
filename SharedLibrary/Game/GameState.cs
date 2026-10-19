@@ -1,5 +1,6 @@
 using SharedLibrary.Communication.DataTransferObjects;
 using SharedLibrary.Game.Actions;
+using SharedLibrary.Utilities;
 using System;
 using System.Collections.Generic;
 
@@ -19,6 +20,16 @@ namespace SharedLibrary.Game
         public List<int> PlayerIDs { get; } = new List<int>();
         public Dictionary<string, CubeState> Cubes { get; } = new Dictionary<string, CubeState>();
 
+        public float GameStartTime { get; set; }
+        public float ServerClockOffset { get; set; }
+        public float CurrentAppliedOffset { get; set; }
+        public float LatestOffsetUpdateTime { get; set; }
+        private float _offsetAccumulationRate = 0.10f; // How much a new tick from server can alter the offset accumulation rate (to prevent ping spikes from altering offset significantly).
+        private float _maxSlewLimit = 0.005f; // Maximum percent of frame time alteration allowed between server ticks.
+        private float _minOffsetUpdateInterval = 0.025f;
+
+
+
         #endregion Properties
 
         #region Events
@@ -35,6 +46,10 @@ namespace SharedLibrary.Game
         public GameState(bool isAuthoritative)
         {
             IsAuthoritative = isAuthoritative;
+            GameStartTime = TimeUtilities.GetTime();
+            LatestOffsetUpdateTime = GameStartTime;
+            ServerClockOffset = 0.0f;
+            CurrentAppliedOffset = 0.0f;
         }
 
         #endregion Constructor
@@ -63,10 +78,24 @@ namespace SharedLibrary.Game
         /// <summary>
         /// Overwrites this game state with a snapshot from the server. Cubes not seen before are added.
         /// </summary>
-        public void ApplyGameState(GameStateDTO gameStateDTO)
+        public void ApplyGameState(float pingDelay, GameStateDTO gameStateDTO)
         {
             PlayerIDs.Clear();
             PlayerIDs.AddRange(gameStateDTO.PlayerIDs);
+
+
+            float estimateServerTime = gameStateDTO.ServerTime + (pingDelay / 2.0f);
+            float rawOffset = estimateServerTime - TimeUtilities.GetTime();
+            ServerClockOffset = (ServerClockOffset * (1 - _offsetAccumulationRate)) + (rawOffset * _offsetAccumulationRate);
+
+            if (TimeUtilities.GetTime() - LatestOffsetUpdateTime > _minOffsetUpdateInterval)
+            {
+                float driftError = ServerClockOffset - CurrentAppliedOffset;
+                float slewAdjustment = Math.Min(Math.Max(driftError, -_maxSlewLimit), _maxSlewLimit);
+                CurrentAppliedOffset += slewAdjustment;
+                LatestOffsetUpdateTime = TimeUtilities.GetTime();
+            }
+
 
             foreach (CubeState incoming in gameStateDTO.Cubes)
             {

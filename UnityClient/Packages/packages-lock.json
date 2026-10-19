@@ -15,6 +15,26 @@
       },
       "url": "https://packages.unity.com"
     },
+    "com.meta.xr.sdk.interaction": {
+      "version": "207.0.1",
+      "depth": 1,
+      "source": "registry",
+      "dependencies": {
+        "com.unity.ugui": "1.0.0",
+        "com.unity.textmeshpro": "3.0.6"
+      },
+      "url": "https://packages.unity.com"
+    },
+    "com.meta.xr.sdk.interaction.ovr": {
+      "version": "207.0.1",
+      "depth": 0,
+      "source": "registry",
+      "dependencies": {
+        "com.meta.xr.sdk.core": "207.0.1",
+        "com.meta.xr.sdk.interaction": "207.0.1"
+      },
+      "url": "https://packages.unity.com"
+    },
     "com.unity.2d.sprite": {
       "version": "1.0.0",
       "depth": 0,
@@ -87,6 +107,13 @@
         "com.unity.modules.uielements": "1.0.0"
       }
     },
+    "com.unity.nuget.newtonsoft-json": {
+      "version": "3.2.2",
+      "depth": 0,
+      "source": "registry",
+      "dependencies": {},
+      "url": "https://packages.unity.com"
+    },
     "com.unity.sysroot": {
       "version": "2.0.10",
       "depth": 1,
@@ -111,6 +138,14 @@
         "com.unity.ext.nunit": "2.0.3",
         "com.unity.modules.imgui": "1.0.0",
         "com.unity.modules.jsonserialize": "1.0.0"
+      }
+    },
+    "com.unity.textmeshpro": {
+      "version": "5.0.0",
+      "depth": 2,
+      "source": "builtin",
+      "dependencies": {
+        "com.unity.ugui": "2.0.0"
       }
     },
     "com.unity.timeline": {
