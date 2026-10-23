@@ -41,6 +41,8 @@ public class MessageHandler : MonoBehaviour
 
     readonly List<Connection> _connections = new List<Connection>(); // Every open socket; locked.
     readonly Dictionary<int, Connection> _connectionsByPlayerID = new Dictionary<int, Connection>(); // Main thread only.
+    public Dictionary<int, long> PlayerLogicalTimestamps = new Dictionary<int, long>();
+
     TcpListener _listener;
     Thread _acceptThread;
     volatile bool _listening;
@@ -311,7 +313,7 @@ public class MessageHandler : MonoBehaviour
     void ProcessSingleAction(int playerID, SingleActionDTO actionDTO)
     {
         GameState gameState = _gameStateManager.GameState;
-        float serverTime = _gameStateManager.ServerTime;
+        double serverTime = _gameStateManager.ServerTime;
 
         if (gameState == null)
         {
@@ -322,14 +324,14 @@ public class MessageHandler : MonoBehaviour
         if (actionDTO.Action.PlayerID != playerID)
         {
             Debug.LogWarning($"{nameof(MessageHandler)}: DTO's player ID does not match the connection's player ID.");
-            _gameStateManager.AddOutgoingDTO(playerID, new GameStateDTO(serverTime, gameState));
+            _gameStateManager.AddOutgoingDTO(playerID, new GameStateDTO(serverTime, PlayerLogicalTimestamps, gameState));
             return;
         }
 
         if (!gameState.HandleSingleAction(actionDTO.Action))
         {
             Debug.Log($"{nameof(MessageHandler)}: rejected {actionDTO.Action.FormatActionText()}");
-            _gameStateManager.AddOutgoingDTO(playerID, new GameStateDTO(serverTime, gameState));
+            _gameStateManager.AddOutgoingDTO(playerID, new GameStateDTO(serverTime, PlayerLogicalTimestamps, gameState));
             return;
         }
 

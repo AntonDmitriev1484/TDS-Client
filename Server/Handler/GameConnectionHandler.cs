@@ -1,6 +1,7 @@
 ﻿using Newtonsoft.Json;
 using Server.Manager;
 using SharedLibrary.Communication.DataTransferObjects;
+using SharedLibrary.Utilities;
 using System.Net.WebSockets;
 using System.Text;
 
@@ -47,7 +48,9 @@ namespace Server.Handler
 
                     try
                     {
-                        var jsonMessage = JsonConvert.DeserializeObject<dynamic>(message);
+                        Console.WriteLine(message + "\n\n");
+
+                        var jsonMessage = JsonUtilities.FromJson<dynamic>(message);
 
                         if (jsonMessage == null)
                         {
@@ -135,8 +138,7 @@ namespace Server.Handler
                 }
                 else if (typeString == typeof(SingleActionDTO).Name)
                 {
-                    // Cast to correct type
-                    SingleActionDTO actionDTO = data.ToObject<SingleActionDTO>();
+                    SingleActionDTO actionDTO = JsonUtilities.FromJson<SingleActionDTO>(data.ToString());
 
                     if (actionDTO.Action.PlayerID != playerID)
                     {
@@ -188,7 +190,7 @@ namespace Server.Handler
             if (gameManagerNullable != null && gameManager != null)
             {
                 // Enqueue the action to be processed by the authoritative game loop.
-                gameManager.EnqueueSingleAction(actionDTO.Action);
+                gameManager.EnqueueSingleAction(actionDTO.Action, actionDTO.ClientLogicalTimestamp, playerID);
 
                 // Acknowledge receipt — actual acceptance and broadcasting will occur when the action is processed in the state sync loop.
                 await this.SendObjectAsync(webSocket, new ResponseDTO(true, "Action queued for processing."));
@@ -309,7 +311,7 @@ namespace Server.Handler
                 Data = obj
             };
 
-            var serializedMessage = JsonConvert.SerializeObject(message);
+            var serializedMessage = JsonUtilities.ToJson(message);
             var buffer = Encoding.UTF8.GetBytes(serializedMessage);
             await webSocket.SendAsync(new ArraySegment<byte>(buffer), WebSocketMessageType.Text, true, CancellationToken.None);
 

@@ -21,12 +21,13 @@ namespace SharedLibrary.Game
         /// may hold the cube. At most one entry is true at a time.
         /// </summary>
         [NonSerialized]
-        public Dictionary<int, bool> GrabPermissions = new Dictionary<int, bool>();
+        public Dictionary<int, CubeFollowTarget> GrabPermissions = new Dictionary<int, CubeFollowTarget>();
 
         // JsonUtility can't serialize dictionaries, so the permissions travel as two parallel lists.
         List<int> _permissionPlayerIDs = new List<int>();
-        List<bool> _permissionValues = new List<bool>();
+        List<CubeFollowTarget> _permissionValues = new List<CubeFollowTarget>();
 
+        public double LastUpdatedServerTime;
         public Pose Pose;
 
         /// <summary>The ID of the player holding grab permission, or null if nobody does.</summary>
@@ -36,7 +37,7 @@ namespace SharedLibrary.Game
             {
                 foreach (var kvp in GrabPermissions)
                 {
-                    if (kvp.Value)
+                    if (kvp.Value != CubeFollowTarget.None)
                         return kvp.Key;
                 }
 
@@ -58,18 +59,19 @@ namespace SharedLibrary.Game
         /// <summary>
         /// A cube that nobody holds yet. Every player gets a false grab permission entry.
         /// </summary>
-        public CubeState(string id, Pose pose, IEnumerable<int> playerIDs)
+        public CubeState(string id, double lastUpdatedServerTime, Pose pose, IEnumerable<int> playerIDs)
         {
             ID = id;
+            LastUpdatedServerTime = lastUpdatedServerTime;
             Pose = pose;
 
             foreach (int playerID in playerIDs)
-                GrabPermissions[playerID] = false;
+                GrabPermissions[playerID] = CubeFollowTarget.None;
         }
 
         #endregion Constructors
 
-        public bool HasGrabPermission(int playerID) => GrabPermissions.TryGetValue(playerID, out bool allowed) && allowed;
+        public bool HasGrabPermission(int playerID) => GrabPermissions.TryGetValue(playerID, out CubeFollowTarget allowed) && allowed != CubeFollowTarget.None;
 
         /// <summary>
         /// Get a deep copy of this object, so a DTO never shares data with the <see cref="GameState"/> that built it.
@@ -79,8 +81,9 @@ namespace SharedLibrary.Game
             return new CubeState
             {
                 ID = ID,
+                LastUpdatedServerTime = LastUpdatedServerTime,
                 Pose = Pose,
-                GrabPermissions = new Dictionary<int, bool>(GrabPermissions),
+                GrabPermissions = new Dictionary<int, CubeFollowTarget>(GrabPermissions),
             };
         }
 
@@ -103,12 +106,19 @@ namespace SharedLibrary.Game
 
         public void OnAfterDeserialize()
         {
-            GrabPermissions = new Dictionary<int, bool>();
+            GrabPermissions = new Dictionary<int, CubeFollowTarget>();
 
             for (int i = 0; i < _permissionPlayerIDs.Count && i < _permissionValues.Count; i++)
                 GrabPermissions[_permissionPlayerIDs[i]] = _permissionValues[i];
         }
 
         #endregion Serialization
+    }
+
+    public enum CubeFollowTarget
+    {
+        None,
+        RightHand,
+        LeftHand,
     }
 }

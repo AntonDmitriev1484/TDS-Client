@@ -3,6 +3,7 @@ using SharedLibrary.Game.Actions;
 using SharedLibrary.Utilities;
 using System;
 using System.Collections.Generic;
+using System.Linq;
 
 namespace SharedLibrary.Game
 {
@@ -20,13 +21,13 @@ namespace SharedLibrary.Game
         public List<int> PlayerIDs { get; } = new List<int>();
         public Dictionary<string, CubeState> Cubes { get; } = new Dictionary<string, CubeState>();
 
-        public float GameStartTime { get; set; }
-        public float ServerClockOffset { get; set; }
-        public float CurrentAppliedOffset { get; set; }
-        public float LatestOffsetUpdateTime { get; set; }
-        private float _offsetAccumulationRate = 0.10f; // How much a new tick from server can alter the offset accumulation rate (to prevent ping spikes from altering offset significantly).
-        private float _maxSlewLimit = 0.005f; // Maximum percent of frame time alteration allowed between server ticks.
-        private float _minOffsetUpdateInterval = 0.025f;
+        public double GameStartTime { get; set; }
+        public double ServerClockOffset { get; set; }
+        public double CurrentAppliedOffset { get; set; }
+        public double LatestOffsetUpdateTime { get; set; }
+        private double _offsetAccumulationRate = 0.10; // How much a new tick from server can alter the offset accumulation rate (to prevent ping spikes from altering offset significantly).
+        private double _maxSlewLimit = 0.005; // Maximum percent of frame time alteration allowed between server ticks.
+        private double _minOffsetUpdateInterval = 0.025;
 
 
 
@@ -48,8 +49,8 @@ namespace SharedLibrary.Game
             IsAuthoritative = isAuthoritative;
             GameStartTime = TimeUtilities.GetTime();
             LatestOffsetUpdateTime = GameStartTime;
-            ServerClockOffset = 0.0f;
-            CurrentAppliedOffset = 0.0f;
+            ServerClockOffset = 0.0;
+            CurrentAppliedOffset = 0.0;
         }
 
         #endregion Constructor
@@ -81,17 +82,17 @@ namespace SharedLibrary.Game
         public void ApplyGameState(float pingDelay, GameStateDTO gameStateDTO)
         {
             PlayerIDs.Clear();
-            PlayerIDs.AddRange(gameStateDTO.PlayerIDs);
+            PlayerIDs.AddRange(gameStateDTO.PlayerLogicalTimestamps.Keys.ToList());
 
 
-            float estimateServerTime = gameStateDTO.ServerTime + (pingDelay / 2.0f);
-            float rawOffset = estimateServerTime - TimeUtilities.GetTime();
+            double estimateServerTime = gameStateDTO.ServerTime + (pingDelay / 2.0);
+            double rawOffset = estimateServerTime - TimeUtilities.GetTime();
             ServerClockOffset = (ServerClockOffset * (1 - _offsetAccumulationRate)) + (rawOffset * _offsetAccumulationRate);
 
             if (TimeUtilities.GetTime() - LatestOffsetUpdateTime > _minOffsetUpdateInterval)
             {
-                float driftError = ServerClockOffset - CurrentAppliedOffset;
-                float slewAdjustment = Math.Min(Math.Max(driftError, -_maxSlewLimit), _maxSlewLimit);
+                double driftError = ServerClockOffset - CurrentAppliedOffset;
+                double slewAdjustment = Math.Min(Math.Max(driftError, -_maxSlewLimit), _maxSlewLimit);
                 CurrentAppliedOffset += slewAdjustment;
                 LatestOffsetUpdateTime = TimeUtilities.GetTime();
             }
@@ -107,10 +108,53 @@ namespace SharedLibrary.Game
                     continue;
                 }
 
-                cube.Pose = incoming.Pose;
-                cube.GrabPermissions = new Dictionary<int, bool>(incoming.GrabPermissions);
+                // Only update if the server time of the incoming is after the cube's current server time.
+                if (cube.LastUpdatedServerTime < incoming.LastUpdatedServerTime)
+                {
+                    cube.LastUpdatedServerTime = incoming.LastUpdatedServerTime;
+                    cube.Pose = incoming.Pose;
+                    cube.GrabPermissions = new Dictionary<int, CubeFollowTarget>(incoming.GrabPermissions);
 
-                // Permissions first, so a client that just lost a cube drops it before the pose is applied.
+                    // Permissions first, so a client that just lost a cube drops it before the pose is applied.
+                    OnGrabPermissionsChanged.Invoke(cube);
+                    OnCubePoseChanged.Invoke(cube);
+                }
+            }
+        }
+
+        /// <summary>
+        /// Replaces this mirrored state with an authoritative state before client predictions are replayed.
+        /// Unlike <see cref="ApplyGameState"/>, this intentionally does not compare timestamps because
+        /// the current state may contain locally predicted values with newer client-estimated times.
+        /// </summary>
+        public void ReplaceFrom(GameState authoritativeState)
+        {
+            PlayerIDs.Clear();
+            PlayerIDs.AddRange(authoritativeState.PlayerIDs);
+            GameStartTime = authoritativeState.GameStartTime;
+            ServerClockOffset = authoritativeState.ServerClockOffset;
+            CurrentAppliedOffset = authoritativeState.CurrentAppliedOffset;
+            LatestOffsetUpdateTime = authoritativeState.LatestOffsetUpdateTime;
+
+            foreach (string cubeID in new List<string>(Cubes.Keys))
+            {
+                if (!authoritativeState.Cubes.ContainsKey(cubeID))
+                    Cubes.Remove(cubeID);
+            }
+
+            foreach (CubeState authoritativeCube in authoritativeState.Cubes.Values)
+            {
+                if (!Cubes.TryGetValue(authoritativeCube.ID, out CubeState cube))
+                {
+                    cube = authoritativeCube.GetDeepCopy();
+                    Cubes.Add(cube.ID, cube);
+                    OnCubeAdded.Invoke(cube);
+                    continue;
+                }
+
+                cube.LastUpdatedServerTime = authoritativeCube.LastUpdatedServerTime;
+                cube.Pose = authoritativeCube.Pose;
+                cube.GrabPermissions = new Dictionary<int, CubeFollowTarget>(authoritativeCube.GrabPermissions);
                 OnGrabPermissionsChanged.Invoke(cube);
                 OnCubePoseChanged.Invoke(cube);
             }
@@ -170,7 +214,8 @@ namespace SharedLibrary.Game
             if (holder != null)
                 return false;
 
-            cube.GrabPermissions[playerID] = true;
+            cube.GrabPermissions[playerID] = grabCubeAction.FollowTarget;
+            cube.LastUpdatedServerTime = grabCubeAction.ServerTime;
             OnGrabPermissionsChanged.Invoke(cube);
 
             return true;
@@ -183,7 +228,8 @@ namespace SharedLibrary.Game
             if (!cube.HasGrabPermission(playerID))
                 return false;
 
-            cube.GrabPermissions[playerID] = false;
+            cube.GrabPermissions[playerID] = CubeFollowTarget.None;
+            cube.LastUpdatedServerTime = releaseCubeAction.ServerTime;
             OnGrabPermissionsChanged.Invoke(cube);
 
             return true;
@@ -194,6 +240,7 @@ namespace SharedLibrary.Game
             if (!cube.HasGrabPermission(moveCubeAction.PlayerID))
                 return false;
 
+            cube.LastUpdatedServerTime = moveCubeAction.ServerTime;
             cube.Pose = moveCubeAction.Pose;
             OnCubePoseChanged.Invoke(cube);
 
@@ -218,7 +265,7 @@ namespace SharedLibrary.Game
                 return false;
 
             foreach (int playerID in new List<int>(cube.GrabPermissions.Keys))
-                cube.GrabPermissions[playerID] = false;
+                cube.GrabPermissions[playerID] = CubeFollowTarget.None;
 
             OnGrabPermissionsChanged.Invoke(cube);
 

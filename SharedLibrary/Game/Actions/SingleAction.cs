@@ -15,6 +15,10 @@ namespace SharedLibrary.Game.Actions
 
         public int PlayerID => _playerID;
 
+        double _serverTime;
+
+        public double ServerTime => _serverTime;
+
         public abstract SingleActionType SingleActionType { get; }
 
         /// <summary>
@@ -22,9 +26,10 @@ namespace SharedLibrary.Game.Actions
         /// </summary>
         protected SingleAction() { }
 
-        protected SingleAction(int playerID)
+        protected SingleAction(int playerID, double serverTime)
         {
             _playerID = playerID;
+            _serverTime = serverTime;
         }
 
         /// <summary>
@@ -48,7 +53,7 @@ namespace SharedLibrary.Game.Actions
 
         protected CubeAction() { }
 
-        protected CubeAction(int playerID, string cubeID) : base(playerID)
+        protected CubeAction(int playerID, double serverTime, string cubeID) : base(playerID, serverTime)
         {
             _cubeID = cubeID;
         }

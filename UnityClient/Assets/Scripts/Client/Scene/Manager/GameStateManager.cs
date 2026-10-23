@@ -4,9 +4,13 @@ using SharedLibrary.Communication.Connection;
 using SharedLibrary.Communication.DataTransferObjects;
 using SharedLibrary.Game;
 using SharedLibrary.Game.Actions;
+using SharedLibrary.Utilities;
 using System;
 using System.Collections;
 using System.Collections.Concurrent;
+using System.Collections.Generic;
+using System.Linq;
+using System.Threading;
 using UnityEngine;
 using UnityEngine.Events;
 using Quaternion = UnityEngine.Quaternion;
@@ -27,6 +31,8 @@ namespace Client.Scene.Manager
     public class GameStateManager : MonoBehaviour
     {
         [SerializeField] GrabbableCubeManager _cubeManager;
+        [SerializeField] OVRHand _rightHand;
+        [SerializeField] OVRHand _leftHand;
 
         [Tooltip("Minimum seconds between pose updates sent for a cube we are holding.")]
         [SerializeField] float _poseSendInterval = 0.05f;
@@ -34,15 +40,36 @@ namespace Client.Scene.Manager
         [Tooltip("A held cube must move or turn at least this much before a new pose is sent (meters / degrees).")]
         [SerializeField] float _poseSendThreshold = 0.001f;
 
-        // DTOs arrive on the WebSocket thread; enqueued here and applied on the main thread in Update.
-        readonly ConcurrentQueue<object> _incomingMessages = new ConcurrentQueue<object>();
+        // The next time to send a pose. 
         float _nextPoseSendTime;
 
-        // Estimated latency between the client and server.
-        float _estimatedLatency = 0.0f;
 
+        // DTOs arrive on the WebSocket thread; enqueued here and applied on the main thread in Update.
+        readonly ConcurrentQueue<object> _incomingMessages = new ConcurrentQueue<object>();
+
+        // Pending actions that have not yet been confirmed by the server.
+        readonly Dictionary<string, List<PendingAction>> _pendingActionsByCube = new Dictionary<string, List<PendingAction>>();
+
+        // The latest authoritative game state from the server.
+        GameState _authoritativeGameState;
+
+        // Logical clock for client's actions.
+        long _nextClientLogicalTimestamp = 1;
+
+
+
+        // Estimated latency between the client and server.
+        float _estimatedLatency => Mathf.Max(0f, ConnectionManager.Instance.GetConnectionLatency(ConnectionType.Game));
+        float _estimatedRoundTripTime => _estimatedLatency * 2f;
+        double _estimatedServerTime => GameState.CurrentAppliedOffset + TimeUtilities.GetTime();
+
+        // The actual gamestate, as rendered for the user.
         public GameState GameState { get; private set; }
 
+        // Dictionary storing the most recent cube state for updated cubes (to be updated per frame).
+        public ConcurrentDictionary<string, CubeState> UpdatedCubes = new();
+
+        // The PlayerID of this client.
         public int LocalPlayerID { get; private set; } = -1;
 
         /// <summary>
@@ -60,10 +87,28 @@ namespace Client.Scene.Manager
             if (_cubeManager == null)
                 _cubeManager = FindFirstObjectByType<GrabbableCubeManager>();
 
+            foreach (OVRHand hand in FindObjectsByType<OVRHand>(FindObjectsSortMode.None))
+            {
+                if (hand.GetHand() == OVRPlugin.Hand.HandRight)
+                {
+                    _rightHand = hand;
+                }
+                else if (hand.GetHand() == OVRPlugin.Hand.HandLeft)
+                {
+                    _leftHand = hand;
+                }
+            }
+
+            if (_rightHand == null)
+                Debug.LogError($"{nameof(GameStateManager)}: no right hand OVRHand found in the scene.");
+            if (_leftHand == null)
+                Debug.LogError($"{nameof(GameStateManager)}: no left hand OVRHand found in the scene.");
+
             GameState = new GameState(isAuthoritative: false);
+            _authoritativeGameState = new GameState(isAuthoritative: false);
             GameState.OnCubeAdded += HandleCubeAdded;
-            GameState.OnGrabPermissionsChanged += HandleGrabPermissionsChanged;
-            GameState.OnCubePoseChanged += HandleCubePoseChanged;
+            GameState.OnGrabPermissionsChanged += FlagCubeStateChanged;
+            GameState.OnCubePoseChanged += FlagCubeStateChanged;
         }
 
         void OnEnable()
@@ -85,6 +130,8 @@ namespace Client.Scene.Manager
                 yield return null;
 
             var cm = ConnectionManager.Instance;
+            Initialize(cm.PlayerID);
+
             if (cm.InboundMessagesDict.TryGetValue(typeof(GameStateDTO), out var gsEvent))
                 ((UnityEvent<GameStateDTO>)gsEvent).AddListener(OnGameStateDTOReceived);
             if (cm.InboundMessagesDict.TryGetValue(typeof(SingleActionDTO), out var saEvent))
@@ -106,6 +153,17 @@ namespace Client.Scene.Manager
         {
             while (_incomingMessages.TryDequeue(out var message))
                 HandleIncomingMessage(message);
+
+            var snapshot = Interlocked.Exchange(
+                ref UpdatedCubes,
+                new ConcurrentDictionary<string, CubeState>());
+
+
+            foreach (CubeState cubeState in snapshot.Values)
+            {
+                HandleCubeUpdated(cubeState);
+            }
+
         }
 
         void LateUpdate()
@@ -132,7 +190,9 @@ namespace Client.Scene.Manager
 
             if (objDTO is GameStateDTO gameStateDTO)
             {
-                GameState.ApplyGameState(_estimatedLatency, gameStateDTO);
+                _authoritativeGameState.ApplyGameState(_estimatedRoundTripTime, gameStateDTO);
+                AcknowledgeAppliedActions(gameStateDTO.PlayerLogicalTimestamps);
+                ReconcilePredictedState();
             }
             else if (objDTO is SingleActionDTO singleActionDTO)
             {
@@ -146,6 +206,82 @@ namespace Client.Scene.Manager
             }
         }
 
+        void ReconcilePredictedState()
+        {
+            GameState.ReplaceFrom(_authoritativeGameState);
+
+            foreach (var pendingActions in _pendingActionsByCube.Values)
+            {
+                foreach (PendingAction pendingAction in pendingActions)
+                {
+                    if (!GameState.HandleSingleAction(pendingAction.Action))
+                        Debug.LogWarning($"{nameof(GameStateManager)}: pending action could not be replayed: {pendingAction.Action.FormatActionText()}");
+                }
+            }
+        }
+
+        void AcknowledgeAppliedActions(Dictionary<int, long> playerLogicalTimestamps)
+        {
+            if (!playerLogicalTimestamps.ContainsKey(LocalPlayerID))
+                return;
+
+            long lastAcknowledgedTimestamp = playerLogicalTimestamps[LocalPlayerID];
+
+            var completedActions = new List<PendingAction>();
+
+            foreach (var pendingActions in _pendingActionsByCube.Values.ToList())
+            {
+                foreach (PendingAction pendingAction in pendingActions)
+                {
+                    if (pendingAction.ClientLogicalTimestamp <= lastAcknowledgedTimestamp)
+                    {
+                        completedActions.Add(pendingAction);
+                    }
+                }
+            }
+
+            foreach (PendingAction completedAction in completedActions)
+                RemovePendingAction(completedAction);
+        }
+
+        PendingAction FindPendingAction(long clientLogicalTimestamp)
+        {
+            foreach (var pendingActions in _pendingActionsByCube.Values)
+            {
+                foreach (PendingAction pendingAction in pendingActions)
+                {
+                    if (pendingAction.ClientLogicalTimestamp == clientLogicalTimestamp)
+                        return pendingAction;
+                }
+            }
+
+            return null;
+        }
+
+        void RemovePendingAction(PendingAction pendingAction)
+        {
+            if (!_pendingActionsByCube.TryGetValue(pendingAction.CubeID, out var pendingActions))
+                return;
+
+            pendingActions.Remove(pendingAction);
+            if (pendingActions.Count == 0)
+                _pendingActionsByCube.Remove(pendingAction.CubeID);
+        }
+
+        sealed class PendingAction
+        {
+            public long ClientLogicalTimestamp { get; }
+            public SingleAction Action { get; }
+            public string CubeID { get; }
+
+            public PendingAction(long clientLogicalTimestamp, SingleAction action, string cubeID)
+            {
+                ClientLogicalTimestamp = clientLogicalTimestamp;
+                Action = action;
+                CubeID = cubeID;
+            }
+        }
+
         #endregion Handle Incoming Events
 
         #region Handle Game Master Events
@@ -153,32 +289,62 @@ namespace Client.Scene.Manager
         void HandleCubeAdded(CubeState state)
         {
             _cubeManager.SpawnCube(Conversions.ToUnityPose(state.Pose), state.ID);
-            HandleGrabPermissionsChanged(state);
+            FlagCubeStateChanged(state);
         }
 
         /// <summary>
-        /// Makes the cube's grabbed state match its permissions. If our own entry isn't true, the cube
-        /// is dropped even if we are still pinching it.
+        /// Updates or adds the specified cube state in the collection of updated cubes.
         /// </summary>
-        void HandleGrabPermissionsChanged(CubeState state)
+        /// <param name="cubeState">The cube state to update or add.</param>
+        void FlagCubeStateChanged(CubeState cubeState)
         {
-            if (!_cubeManager.TryGetCube(state.ID, out var cube))
-                return;
-
-            if (!state.HasGrabPermission(LocalPlayerID))
-                cube.Grabbed = false; // Forgets the hand, so the cube stops following it.
-
-            // Still shown as grabbed (without following anything) while another player holds it.
-            cube.Grabbed = state.IsHeld;
+            if (this.UpdatedCubes.ContainsKey(cubeState.ID))
+            {
+                this.UpdatedCubes[cubeState.ID] = cubeState;
+            }
+            else
+            {
+                this.UpdatedCubes.TryAdd(cubeState.ID, cubeState);
+            }
         }
 
-        void HandleCubePoseChanged(CubeState state)
+        /// <summary>
+        /// Handles when a cube's state has been updated.
+        /// </summary>
+        /// <param name="cubeState">The fresh cube state.</param>
+        void HandleCubeUpdated(CubeState cubeState)
         {
-            // A cube following one of our hands is already where it should be.
-            if (!_cubeManager.TryGetCube(state.ID, out var cube) || cube.FollowTarget != null)
+            if (!_cubeManager.TryGetCube(cubeState.ID, out var cube))
                 return;
 
-            cube.transform.SetPositionAndRotation(Conversions.ToUnityPosition(state.Pose), Conversions.ToUnityRotation(state.Pose));
+            Debug.Log($"Updating cube: {JsonUtilities.ToJson(cubeState)}");
+
+            // Appropriately set grab permissions.
+            if (cubeState.HasGrabPermission(LocalPlayerID))
+            {
+                // If our player is grabbing the block, then show it grabbing properly.
+                if (cubeState.GrabPermissions[LocalPlayerID] == CubeFollowTarget.LeftHand && _leftHand != null)
+                {
+                    cube.Grab(_leftHand.transform);
+                }
+                else if (cubeState.GrabPermissions[LocalPlayerID] == CubeFollowTarget.RightHand && _rightHand != null)
+                {
+                    cube.Grab(_rightHand.transform);
+                }
+            }
+            else
+            {
+                cube.Grabbed = false; // Forgets the hand, so the cube stops following it.
+            }
+
+            // Still shown as grabbed (without following anything) while another player holds it.
+            cube.Grabbed = cubeState.IsHeld;
+
+            // Set the position if our player isn't holding the cube.
+            if (cubeState.HolderPlayerID != LocalPlayerID) // Only alter the pose if we aren't currently holding the object.
+            {
+                cube.transform.SetPositionAndRotation(Conversions.ToUnityPosition(cubeState.Pose), Conversions.ToUnityRotation(cubeState.Pose));
+            }
         }
 
         #endregion Handle Game Master Events
@@ -187,17 +353,17 @@ namespace Client.Scene.Manager
 
         void OnPinchStarted(GrabbableCube cube, OVRHand hand)
         {
-            Debug.Log("OnPinchStarted: " + cube.Id + " by hand: " + hand.name);
-            Debug.Log("Number of players in Cube: " + this.GameState.Cubes[cube.Id].GrabPermissions.Keys.Count);
-            foreach (var kvp in this.GameState.Cubes[cube.Id].GrabPermissions)
+            CubeFollowTarget followTarget = CubeFollowTarget.RightHand;
+            if (hand.GetHand() == OVRPlugin.Hand.HandLeft)
             {
-                Debug.Log($"Grab permissions for cube {cube.Id}: player {kvp.Key} = {kvp.Value}");
+                followTarget = CubeFollowTarget.LeftHand;
             }
 
-            if (HandleOurAction(new GrabCubeAction(LocalPlayerID, cube.Id)))
-                cube.Grab(hand.transform);
-            else
+            if (!HandleOurAction(new GrabCubeAction(LocalPlayerID, _estimatedServerTime, cube.Id, followTarget)))
+            {
                 Debug.LogWarning($"Failed to grab cube {cube.Id} (possibly because we don't have permission).");
+                CubeState cubeState = this.GameState.Cubes[cube.Id];
+            }
         }
 
         void OnPinchEnded(GrabbableCube cube, OVRHand hand)
@@ -207,7 +373,9 @@ namespace Client.Scene.Manager
             if (cube.FollowTarget != hand.transform)
                 return;
 
-            HandleOurAction(new ReleaseCubeAction(LocalPlayerID, cube.Id));
+            Debug.Log("Player released cube!");
+
+            HandleOurAction(new ReleaseCubeAction(LocalPlayerID, _estimatedServerTime, cube.Id));
         }
 
         /// <summary>Sends the pose of every cube one of our hands is carrying, throttled.</summary>
@@ -229,7 +397,7 @@ namespace Client.Scene.Manager
                     Quaternion.Angle(t.rotation, Conversions.ToUnityRotation(state.Pose)) < _poseSendThreshold)
                     continue;
 
-                HandleOurAction(new MoveCubeAction(LocalPlayerID, cube.Id, Conversions.ToSharedPose(t.position, t.rotation)));
+                HandleOurAction(new MoveCubeAction(LocalPlayerID, _estimatedServerTime, cube.Id, Conversions.ToSharedPose(t.position, t.rotation)));
             }
         }
 
@@ -242,7 +410,22 @@ namespace Client.Scene.Manager
             if (!GameState.HandleSingleAction(singleAction))
                 return false;
 
-            var dto = new SingleActionDTO(singleAction);
+            if (!(singleAction is CubeAction cubeAction))
+                return false;
+
+            var pendingAction = new PendingAction(++_nextClientLogicalTimestamp, singleAction, cubeAction.CubeID);
+            if (!_pendingActionsByCube.TryGetValue(cubeAction.CubeID, out var pendingActions))
+            {
+                pendingActions = new List<PendingAction>();
+                _pendingActionsByCube.Add(cubeAction.CubeID, pendingActions);
+            }
+
+            if (singleAction is MoveCubeAction)
+                pendingActions.RemoveAll(pending => pending.Action is MoveCubeAction);
+
+            pendingActions.Add(pendingAction);
+
+            var dto = new SingleActionDTO(singleAction, pendingAction.ClientLogicalTimestamp);
 
             // Raise legacy event for any subscribers (e.g., ServerConnection)
             OnOutgoingDTO?.Invoke(dto);
@@ -255,6 +438,8 @@ namespace Client.Scene.Manager
                 {
                     // Fire-and-forget send; do not await on the network thread here.
                     _ = cm.SendDTO(ConnectionType.Game, dto);
+
+                    Debug.Log($"Sent SingleAction message with action type: {singleAction.SingleActionType} to server!");
                 }
             }
             catch (Exception ex)

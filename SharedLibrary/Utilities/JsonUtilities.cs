@@ -1,5 +1,7 @@
 using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
 using Newtonsoft.Json.Serialization;
+using SharedLibrary.Game.Actions;
 using System;
 using System.Collections;
 using System.Collections.Generic;
@@ -27,7 +29,8 @@ namespace SharedLibrary.Utilities
             {
                 ContractResolver = resolver,
                 Formatting = Formatting.None,
-                NullValueHandling = NullValueHandling.Ignore
+                NullValueHandling = NullValueHandling.Ignore,
+                Converters = { new SingleActionConverter() }
             };
         }
 
@@ -134,6 +137,58 @@ namespace SharedLibrary.Utilities
 
             var method = type.GetMethod("OnAfterDeserialize", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
             method?.Invoke(obj, null);
+        }
+
+        sealed class SingleActionConverter : JsonConverter
+        {
+            public override bool CanWrite => false;
+
+            public override bool CanConvert(Type objectType)
+            {
+                return objectType == typeof(SingleAction);
+            }
+
+            public override object ReadJson(JsonReader reader, Type objectType, object existingValue, JsonSerializer serializer)
+            {
+                if (reader.TokenType == JsonToken.Null)
+                    return null;
+
+                var actionObject = JObject.Load(reader);
+                var actionTypeToken = actionObject[nameof(SingleAction.SingleActionType)];
+
+                if (actionTypeToken == null)
+                    throw new JsonSerializationException("SingleActionType is required to deserialize a SingleAction.");
+
+                var actionType = actionTypeToken.ToObject<SingleActionType>();
+                SingleAction action;
+
+                switch (actionType)
+                {
+                    case SingleActionType.GrabCube:
+                        action = new GrabCubeAction();
+                        break;
+                    case SingleActionType.ReleaseCube:
+                        action = new ReleaseCubeAction();
+                        break;
+                    case SingleActionType.MoveCube:
+                        action = new MoveCubeAction();
+                        break;
+                    default:
+                        throw new JsonSerializationException($"Unsupported SingleActionType '{actionType}'.");
+                }
+
+                using (var actionReader = actionObject.CreateReader())
+                {
+                    serializer.Populate(actionReader, action);
+                }
+
+                return action;
+            }
+
+            public override void WriteJson(JsonWriter writer, object value, JsonSerializer serializer)
+            {
+                throw new NotSupportedException();
+            }
         }
 
         // Reference equality comparer for visited hash sets

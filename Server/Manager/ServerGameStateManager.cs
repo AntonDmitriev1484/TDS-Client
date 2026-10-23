@@ -42,25 +42,43 @@ namespace Server.Manager
 
         public float TickInterval => _tickInterval;
 
-        public float ServerTime => TimeUtilities.GetTime();
+        public double ServerTime { get; set; }
+        float _lastBroadcastPrinted = 0;
 
         /// <summary>The authoritative game state; null until the game starts.</summary>
         public GameState GameState { get; private set; }
+
+        /// <summary>The logical timestamps of all clients as recently received.</summary>
+        public Dictionary<int, long> PlayerLogicalTimestamps { get; private set; }
 
         private readonly IServiceScopeFactory _scopeFactory;
         // Cancellation and task for the state synchronization loop.
         private CancellationTokenSource? _stateSyncCts;
         private Task? _stateSyncTask;
         // Per-object action queues. Keyed by object ID (e.g., cube ID). Thread-safe.
-        private readonly ConcurrentDictionary<string, ConcurrentQueue<SingleAction>> _actionQueues
-            = new ConcurrentDictionary<string, ConcurrentQueue<SingleAction>>();
+        private readonly ConcurrentDictionary<string, ConcurrentQueue<QueuedAction>> _actionQueues
+            = new ConcurrentDictionary<string, ConcurrentQueue<QueuedAction>>();
+
+        private sealed class QueuedAction
+        {
+            public SingleAction Action { get; }
+            public long ClientLogicalTimestamp { get; }
+            public int PlayerID { get; }
+
+            public QueuedAction(SingleAction action, long clientLogicalTimestamp, int playerID)
+            {
+                Action = action;
+                ClientLogicalTimestamp = clientLogicalTimestamp;
+                PlayerID = playerID;
+            }
+        }
 
         /// <summary>
         /// Enqueue a single action to the per-object queue. Actions targeting objects should be enqueued
         /// under the object's ID so they are processed in order per-object during the state sync.
         /// </summary>
         /// <param name="action">The action to enqueue.</param>
-        public void EnqueueSingleAction(SingleAction action)
+        public void EnqueueSingleAction(SingleAction action, long clientLogicalTimestamp, int playerID)
         {
             if (action == null) return;
 
@@ -71,8 +89,8 @@ namespace Server.Manager
                 key = cubeAction.CubeID ?? "global";
             }
 
-            var queue = _actionQueues.GetOrAdd(key, _ => new ConcurrentQueue<SingleAction>());
-            queue.Enqueue(action);
+            var queue = _actionQueues.GetOrAdd(key, _ => new ConcurrentQueue<QueuedAction>());
+            queue.Enqueue(new QueuedAction(action, clientLogicalTimestamp, playerID));
         }
 
         #endregion Properties
@@ -106,12 +124,21 @@ namespace Server.Manager
         /// </summary>
         void InitializeGame(List<int> playerIDs)
         {
+            ServerTime = TimeUtilities.GetTime();
+            double serverStartTime = ServerTime;
             var cubes = new List<CubeState>();
             Pose[] startingPoses = GetStartingCubePoses();
             for (int i = 0; i < startingPoses.Length; i++)
-                cubes.Add(new CubeState($"cube-{i}", startingPoses[i], playerIDs));
+                cubes.Add(new CubeState($"cube-{i}", serverStartTime, startingPoses[i], playerIDs));
 
             GameState = new GameState(isAuthoritative: true);
+            PlayerLogicalTimestamps = new Dictionary<int, long>();
+            foreach (int playerID in playerIDs)
+            {
+                PlayerLogicalTimestamps.Add(playerID, 0);
+            }
+
+
             GameState.ServerInitialize(playerIDs, cubes);
 
             BroadcastGameState();
@@ -164,7 +191,7 @@ namespace Server.Manager
         public void OnPlayerConnected(int playerID)
         {
             if (GameState != null)
-                this.AddOutgoingDTO(playerID, new GameStateDTO(ServerTime, GameState));
+                this.AddOutgoingDTO(playerID, new GameStateDTO(ServerTime, PlayerLogicalTimestamps, GameState));
         }
 
         /// <summary>
@@ -207,13 +234,13 @@ namespace Server.Manager
                 while (!token.IsCancellationRequested)
                 {
                     // First: drain per-object queues into temporary lists so new incoming messages are not processed this tick.
-                    var queuesSnapshot = new List<KeyValuePair<string, List<SingleAction>>>();
+                    var queuesSnapshot = new List<KeyValuePair<string, List<QueuedAction>>>();
 
                     foreach (var kvp in _actionQueues)
                     {
                         var key = kvp.Key;
                         var queue = kvp.Value;
-                        var drained = new List<SingleAction>();
+                        var drained = new List<QueuedAction>();
 
                         while (queue.TryDequeue(out var action))
                         {
@@ -221,25 +248,33 @@ namespace Server.Manager
                         }
 
                         if (drained.Count > 0)
-                            queuesSnapshot.Add(new KeyValuePair<string, List<SingleAction>>(key, drained));
+                            queuesSnapshot.Add(new KeyValuePair<string, List<QueuedAction>>(key, drained));
                     }
 
                     // Process drained actions. Apply them to the authoritative GameState.
                     foreach (var pair in queuesSnapshot)
                     {
-                        foreach (var action in pair.Value)
+                        foreach (QueuedAction queuedAction in pair.Value)
                         {
                             // TODO: handle pre-action checks on each input.
 
+                            Console.WriteLine($"Handling action: {JsonUtilities.ToJson(queuedAction)}");
 
                             // Apply the action to the authoritative GameState.
-                            bool successfulAction = GameState.HandleSingleAction(action);
+                            bool successfulAction = GameState.HandleSingleAction(queuedAction.Action);
 
                             // TODO: handle action failures, logging, and generating per-player responses or broadcasts.
+                            if (PlayerLogicalTimestamps[queuedAction.PlayerID] < queuedAction.ClientLogicalTimestamp)
+                            {
+                                PlayerLogicalTimestamps[queuedAction.PlayerID] = queuedAction.ClientLogicalTimestamp;
+                            }
                         }
                     }
 
                     // TODO: Run per-tick authoritative updates here (physics, AI, etc.)
+
+                    // Update the game state server time.
+                    ServerTime = TimeUtilities.GetTime();
 
                     // Broadcast the updated state to all players
                     BroadcastGameState();
@@ -286,8 +321,26 @@ namespace Server.Manager
 
         void BroadcastGameState()
         {
+            _lastBroadcastPrinted += 1;
+            if (_lastBroadcastPrinted > 100)
+            {
+                _lastBroadcastPrinted = 0;
+
+                GameStateDTO gameStateDTO = new GameStateDTO(ServerTime, PlayerLogicalTimestamps, GameState);
+
+                MessageEnvelope<GameStateDTO> message = new MessageEnvelope<GameStateDTO>
+                {
+                    Type = typeof(GameStateDTO).Name,
+                    Data = gameStateDTO
+                };
+
+                var serializedMessage = JsonUtilities.ToJson(message);
+
+                Console.WriteLine($"GameState: {serializedMessage}\n");
+            }
+
             foreach (int playerID in GameState.PlayerIDs)
-                this.AddOutgoingDTO(playerID, new GameStateDTO(ServerTime, GameState));
+                this.AddOutgoingDTO(playerID, new GameStateDTO(ServerTime, PlayerLogicalTimestamps, GameState));
         }
 
         public async Task<bool> AddOutgoingDTO(int playerID, object obj)

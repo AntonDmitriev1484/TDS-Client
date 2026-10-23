@@ -151,6 +151,7 @@ namespace Server.Manager
             try
             {
                 ServerGameStateManager gameStateManager = new ServerGameStateManager(_scopeFactory, playerIDs);
+                this.AddGame(gameStateManager);
                 return;
             }
             catch (Exception ex)

@@ -10,10 +10,19 @@ namespace SharedLibrary.Game.Actions
     public class GrabCubeAction : CubeAction
     {
         public override SingleActionType SingleActionType => SingleActionType.GrabCube;
+        public CubeFollowTarget FollowTarget;
 
         public GrabCubeAction() { }
 
-        public GrabCubeAction(int playerID, string cubeID) : base(playerID, cubeID) { }
+        public GrabCubeAction(int playerID, double serverTime, string cubeID, CubeFollowTarget cubeFollowTarget) : base(playerID, serverTime, cubeID)
+        {
+            if (cubeFollowTarget == CubeFollowTarget.None)
+            {
+                throw new Exception($"Follow target {cubeFollowTarget} is not supported (Use ReleaseCubeAction func instead).");
+            }
+
+            FollowTarget = cubeFollowTarget;
+        }
     }
 
     /// <summary>
@@ -26,7 +35,7 @@ namespace SharedLibrary.Game.Actions
 
         public ReleaseCubeAction() { }
 
-        public ReleaseCubeAction(int playerID, string cubeID) : base(playerID, cubeID) { }
+        public ReleaseCubeAction(int playerID, double serverTime, string cubeID) : base(playerID, serverTime, cubeID) { }
     }
 
     /// <summary>
@@ -44,7 +53,7 @@ namespace SharedLibrary.Game.Actions
 
         public MoveCubeAction() { }
 
-        public MoveCubeAction(int playerID, string cubeID, Pose pose) : base(playerID, cubeID)
+        public MoveCubeAction(int playerID, double serverTime, string cubeID, Pose pose) : base(playerID, serverTime, cubeID)
         {
             _position = pose.Position;
             _rotation = pose.Rotation;

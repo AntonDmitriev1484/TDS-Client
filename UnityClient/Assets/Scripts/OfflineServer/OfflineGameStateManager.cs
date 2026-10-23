@@ -33,7 +33,7 @@ public class OfflineGameStateManager : MonoBehaviour
         return new[] { 0 };
     }
 
-    [SerializeField] MessageHandler _messageHandler;
+    [SerializeField] protected MessageHandler _messageHandler;
 
     [SerializeField] float _spawnDistance = 1.0f;
 
@@ -47,7 +47,7 @@ public class OfflineGameStateManager : MonoBehaviour
 
     /// <summary>The authoritative game state; null until the game starts.</summary>
     public GameState GameState { get; private set; }
-    public float ServerTime => TimeUtilities.GetTime();
+    public double ServerTime => TimeUtilities.GetTime();
 
     #region Unity Functions
 
@@ -94,7 +94,7 @@ public class OfflineGameStateManager : MonoBehaviour
 
         for (int i = 0; i < startingPoses.Length; i++)
         {
-            cubes.Add(new CubeState($"cube-{i}", Conversions.ToSharedPose(startingPoses[i]), GetPlayerIDs()));
+            cubes.Add(new CubeState($"cube-{i}", ServerTime, Conversions.ToSharedPose(startingPoses[i]), GetPlayerIDs()));
         }
 
         GameState = new GameState(isAuthoritative: true);
@@ -146,7 +146,7 @@ public class OfflineGameStateManager : MonoBehaviour
     {
         if (GameState != null)
         {
-            AddOutgoingDTO(playerID, new GameStateDTO(ServerTime, GameState));
+            AddOutgoingDTO(playerID, new GameStateDTO(ServerTime, _messageHandler.PlayerLogicalTimestamps, GameState));
         }
     }
 
@@ -185,7 +185,7 @@ public class OfflineGameStateManager : MonoBehaviour
     void BroadcastGameState()
     {
         foreach (int playerID in GetPlayerIDs())
-            AddOutgoingDTO(playerID, new GameStateDTO(ServerTime, GameState));
+            AddOutgoingDTO(playerID, new GameStateDTO(ServerTime, _messageHandler.PlayerLogicalTimestamps, GameState));
     }
 
     #endregion Process DTOs

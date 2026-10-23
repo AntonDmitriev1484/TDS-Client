@@ -1,5 +1,4 @@
 using SharedLibrary.Game.Actions;
-using SharedLibrary.Utilities;
 using System;
 
 namespace SharedLibrary.Communication.DataTransferObjects
@@ -13,34 +12,22 @@ namespace SharedLibrary.Communication.DataTransferObjects
     [Serializable]
     public class SingleActionDTO
     {
-        SingleActionType _actionType;
-        string _actionJson;
+        public SingleActionType ActionType { get; set; }
 
-        [NonSerialized] SingleAction _action;
+        public SingleAction Action { get; set; }
 
-        public SingleAction Action => _action ??= DeserializeAction(_actionType, _actionJson);
+        public long ClientLogicalTimestamp { get; set; }
 
         /// <summary>
         /// Parameterless constructor for JSON deserialization between server and client.
         /// </summary>
         public SingleActionDTO() { }
 
-        public SingleActionDTO(SingleAction action)
+        public SingleActionDTO(SingleAction action, long clientLogicalTimestamp = 0)
         {
-            _action = action;
-            _actionType = action.SingleActionType;
-            _actionJson = JsonUtilities.ToJson(action);
-        }
-
-        static SingleAction DeserializeAction(SingleActionType actionType, string json)
-        {
-            switch (actionType)
-            {
-                case SingleActionType.GrabCube: return JsonUtilities.FromJson<GrabCubeAction>(json);
-                case SingleActionType.ReleaseCube: return JsonUtilities.FromJson<ReleaseCubeAction>(json);
-                case SingleActionType.MoveCube: return JsonUtilities.FromJson<MoveCubeAction>(json);
-                default: throw new ArgumentOutOfRangeException(nameof(actionType), $"Unknown SingleActionType: {actionType}");
-            }
+            ActionType = action.SingleActionType;
+            Action = action;
+            ClientLogicalTimestamp = clientLogicalTimestamp;
         }
     }
 }

@@ -55,6 +55,12 @@ public class GrabbableCube : MonoBehaviour
     /// </summary>
     public void Grab(Transform hand)
     {
+        // If we have already followed the hand, then return early.
+        if (_followTarget == hand)
+        {
+            return;
+        }
+
         Grabbed = true;
         _followTarget = hand;
         if (hand == null)
@@ -93,6 +99,8 @@ public class GrabbableCube : MonoBehaviour
 
         transform.SetPositionAndRotation(_followTarget.TransformPoint(_followLocalPosition),
             _followTarget.rotation * _followLocalRotation);
+
+        Debug.Log($"Cube set to position: {_followTarget.TransformPoint(_followLocalPosition)}");
     }
 
     void ApplyColor()

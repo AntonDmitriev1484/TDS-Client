@@ -17,6 +17,7 @@ using System.Threading.Tasks;
 using UnityEngine;
 using UnityEngine.Events;
 using WebSocketSharp;
+using Stopwatch = System.Diagnostics.Stopwatch;
 
 
 namespace Client.Communication.Manager
@@ -47,9 +48,17 @@ namespace Client.Communication.Manager
         /// </summary>
         // Web Socket for game connection
         private WebSocket GameWebSocket;
+        public Dictionary<ConnectionType, float> EstimatedLatencyDict { get; set; }
 
         [SerializeField]
         int RetryConnectionDelaySeconds = 2;
+
+        [SerializeField]
+        float LatencyMeasurementIntervalSeconds = 1f;
+
+        private Dictionary<ConnectionType, Coroutine> LatencyMeasurementCoroutines { get; set; }
+        private Dictionary<ConnectionType, double> RttTotalsMilliseconds { get; set; }
+        private Dictionary<ConnectionType, int> RttSampleCounts { get; set; }
 
         #endregion Properties
 
@@ -143,17 +152,24 @@ namespace Client.Communication.Manager
             this.NeedsConnection = new Dictionary<ConnectionType, bool>();
             this.IsConnected = new Dictionary<ConnectionType, bool>();
             this.IsReconnecting = new Dictionary<ConnectionType, bool>();
+            this.EstimatedLatencyDict = new Dictionary<ConnectionType, float>();
+            this.LatencyMeasurementCoroutines = new Dictionary<ConnectionType, Coroutine>();
+            this.RttTotalsMilliseconds = new Dictionary<ConnectionType, double>();
+            this.RttSampleCounts = new Dictionary<ConnectionType, int>();
 
             foreach (ConnectionType connectionType in Enum.GetValues(typeof(ConnectionType)))
             {
                 this.NeedsConnection.Add(connectionType, false);
                 this.IsConnected.Add(connectionType, false);
                 this.IsReconnecting.Add(connectionType, false);
+                this.EstimatedLatencyDict.Add(connectionType, -1.0f);
+                this.LatencyMeasurementCoroutines.Add(connectionType, null);
+                this.RttTotalsMilliseconds.Add(connectionType, 0d);
+                this.RttSampleCounts.Add(connectionType, 0);
             }
 
             System.Net.ServicePointManager.ServerCertificateValidationCallback =
                 (sender, cert, chain, errors) => true;
-
         }
 
         /// <summary>
@@ -529,6 +545,7 @@ namespace Client.Communication.Manager
             webSocket.OnOpen += (sender, e) =>
             {
                 IsConnected[connectionType] = true;
+                MainThreadDispatcher.Enqueue(() => StartLatencyMeasurement(connectionType, webSocket));
                 MainThreadDispatcher.Enqueue(() =>
                 {
                     Debug.Log($"{connectionType.ToString()} WebSocket connection opened.");
@@ -568,6 +585,51 @@ namespace Client.Communication.Manager
 
 
             return true;
+        }
+
+        private void StartLatencyMeasurement(ConnectionType connectionType, WebSocket webSocket)
+        {
+            StopLatencyMeasurement(connectionType);
+
+            RttTotalsMilliseconds[connectionType] = 0d;
+            RttSampleCounts[connectionType] = 0;
+            EstimatedLatencyDict[connectionType] = 0f;
+            LatencyMeasurementCoroutines[connectionType] = StartCoroutine(MeasureLatency(connectionType, webSocket));
+        }
+
+        private void StopLatencyMeasurement(ConnectionType connectionType)
+        {
+            if (LatencyMeasurementCoroutines[connectionType] != null)
+            {
+                StopCoroutine(LatencyMeasurementCoroutines[connectionType]);
+                LatencyMeasurementCoroutines[connectionType] = null;
+            }
+        }
+
+        private IEnumerator MeasureLatency(ConnectionType connectionType, WebSocket webSocket)
+        {
+            while (IsConnected[connectionType] && webSocket != null && webSocket.IsAlive)
+            {
+                Stopwatch stopwatch = Stopwatch.StartNew();
+                bool pingSucceeded = webSocket.Ping();
+                stopwatch.Stop();
+
+                if (pingSucceeded)
+                {
+                    RttTotalsMilliseconds[connectionType] += stopwatch.Elapsed.TotalMilliseconds;
+                    RttSampleCounts[connectionType]++;
+
+                    double averageRttMilliseconds = RttTotalsMilliseconds[connectionType] /
+                        RttSampleCounts[connectionType];
+
+                    // Estimated one-way latency is half the measured round-trip time.
+                    EstimatedLatencyDict[connectionType] = (float)(averageRttMilliseconds / 2000d);
+                }
+
+                yield return new WaitForSeconds(Mathf.Max(0.01f, LatencyMeasurementIntervalSeconds));
+            }
+
+            LatencyMeasurementCoroutines[connectionType] = null;
         }
 
         /// <summary>
@@ -661,6 +723,7 @@ namespace Client.Communication.Manager
         {
             // Handle closing connections.
 
+            MainThreadDispatcher.Enqueue(() => StopLatencyMeasurement(connectionType));
 
             // If it still needs a connection, attempt to reconnect.
             if (NeedsConnection[connectionType])
@@ -733,6 +796,7 @@ namespace Client.Communication.Manager
         public async Task<bool> CloseWebSocket(ConnectionType connectionType)
         {
             this.NeedsConnection[connectionType] = false;
+            MainThreadDispatcher.Enqueue(() => StopLatencyMeasurement(connectionType));
 
             if (!IsConnected[connectionType])
             {
@@ -796,6 +860,28 @@ namespace Client.Communication.Manager
         }
 
         /// <summary>
+        /// Gets the running average of round trip time for a particular connection.
+        /// </summary>
+        /// <param name="connectionType">The type of connection.</param>
+        /// <returns>The round trip time, or -1.0f if the connection is not currently alive.</returns>
+        public float GetConnectionLatency(ConnectionType connectionType)
+        {
+            float connectionRTT;
+            switch (connectionType)
+            {
+                case ConnectionType.Game:
+                    connectionRTT = this.EstimatedLatencyDict[connectionType];
+                    break;
+                default:
+                    string methodName = System.Reflection.MethodBase.GetCurrentMethod().Name;
+                    Debug.LogError($"{connectionType.ToString()} WebSocket is not supported in Server Manager. See {methodName} method for more details");
+                    return -1.0f;
+            }
+
+            return connectionRTT;
+        }
+
+        /// <summary>
         /// Send a JSON message through the specified web socket.
         /// </summary>
         /// <typeparam name="T">Type of Object being sent.</typeparam>
@@ -856,7 +942,7 @@ namespace Client.Communication.Manager
             catch (Exception ex)
             {
                 // Log the exception or handle it as needed
-                Console.WriteLine($"Error sending message: {ex.Message}");
+                Debug.LogError($"Error sending message: {ex.Message}");
                 return false; // An exception indicates the send failed
             }
         }
@@ -870,11 +956,6 @@ namespace Client.Communication.Manager
         /// <returns></returns>
         public async Task HandleIncomingMessage(ConnectionType connectionType, WebSocket webSocket, MessageEventArgs e)
         {
-            MainThreadDispatcher.Enqueue(() =>
-            {
-                Debug.Log($"{connectionType.ToString()} WebSocket connection received a message from server: " + e.Data);
-            });
-
             var messageData = e.Data;
 
             // Try to deserialize the message as different types
@@ -918,7 +999,7 @@ namespace Client.Communication.Manager
                 object typedData = null;
                 try
                 {
-                    typedData = ((JToken)data).ToObject(type);
+                    typedData = JsonUtilities.FromJson(data.ToString(), type);
                 }
                 catch (Exception ex)
                 {
