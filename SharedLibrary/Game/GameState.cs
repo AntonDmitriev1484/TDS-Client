@@ -109,9 +109,9 @@ namespace SharedLibrary.Game
                 }
 
                 // Only update if the server time of the incoming is after the cube's current server time.
-                if (cube.LastUpdatedServerTime < incoming.LastUpdatedServerTime)
+                if (cube.PoseLastUpdatedServerTime < incoming.PoseLastUpdatedServerTime)
                 {
-                    cube.LastUpdatedServerTime = incoming.LastUpdatedServerTime;
+                    cube.PoseLastUpdatedServerTime = incoming.PoseLastUpdatedServerTime;
                     cube.Pose = incoming.Pose;
                     cube.GrabPermissions = new Dictionary<int, CubeFollowTarget>(incoming.GrabPermissions);
 
@@ -152,7 +152,7 @@ namespace SharedLibrary.Game
                     continue;
                 }
 
-                cube.LastUpdatedServerTime = authoritativeCube.LastUpdatedServerTime;
+                cube.PoseLastUpdatedServerTime = authoritativeCube.PoseLastUpdatedServerTime;
                 cube.Pose = authoritativeCube.Pose;
                 cube.GrabPermissions = new Dictionary<int, CubeFollowTarget>(authoritativeCube.GrabPermissions);
                 OnGrabPermissionsChanged.Invoke(cube);
@@ -203,19 +203,25 @@ namespace SharedLibrary.Game
         {
             int playerID = grabCubeAction.PlayerID;
 
+            // Check if the user has permission to grab the cube.
             if (!cube.GrabPermissions.ContainsKey(playerID))
                 return false;
 
             int? holder = cube.HolderPlayerID;
 
+            // If the player is already holding the cube, return true.
             if (holder == playerID)
                 return true;
 
-            if (holder != null)
+            // If another player is holding the cube already, check if:
+            // 2 seconds have passed if authoritative.
+            // 2.5 seconds have passed if client-side (to protect against latency between server and client).
+            float timeBeforeNextGrabAllowed = IsAuthoritative ? 2.0f : 2.5f;
+            if (holder != null && (grabCubeAction.ServerTime - cube.GrabLastUpdatedServerTime < 2.0f))
                 return false;
 
             cube.GrabPermissions[playerID] = grabCubeAction.FollowTarget;
-            cube.LastUpdatedServerTime = grabCubeAction.ServerTime;
+            cube.GrabLastUpdatedServerTime = grabCubeAction.ServerTime;
             OnGrabPermissionsChanged.Invoke(cube);
 
             return true;
@@ -229,7 +235,7 @@ namespace SharedLibrary.Game
                 return false;
 
             cube.GrabPermissions[playerID] = CubeFollowTarget.None;
-            cube.LastUpdatedServerTime = releaseCubeAction.ServerTime;
+            cube.GrabLastUpdatedServerTime = releaseCubeAction.ServerTime;
             OnGrabPermissionsChanged.Invoke(cube);
 
             return true;
@@ -240,7 +246,7 @@ namespace SharedLibrary.Game
             if (!cube.HasGrabPermission(moveCubeAction.PlayerID))
                 return false;
 
-            cube.LastUpdatedServerTime = moveCubeAction.ServerTime;
+            cube.PoseLastUpdatedServerTime = moveCubeAction.ServerTime;
             cube.Pose = moveCubeAction.Pose;
             OnCubePoseChanged.Invoke(cube);
 

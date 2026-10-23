@@ -94,7 +94,7 @@ public class OfflineGameStateManager : MonoBehaviour
 
         for (int i = 0; i < startingPoses.Length; i++)
         {
-            cubes.Add(new CubeState($"cube-{i}", ServerTime, Conversions.ToSharedPose(startingPoses[i]), GetPlayerIDs()));
+            cubes.Add(new CubeState($"cube-{i}", ServerTime, ServerTime, Conversions.ToSharedPose(startingPoses[i]), GetPlayerIDs()));
         }
 
         GameState = new GameState(isAuthoritative: true);

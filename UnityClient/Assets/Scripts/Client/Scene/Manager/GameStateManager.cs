@@ -332,16 +332,20 @@ namespace Client.Scene.Manager
                     cube.Grab(_rightHand.transform);
                 }
             }
-            else
-            {
-                cube.Grabbed = false; // Forgets the hand, so the cube stops following it.
-            }
 
             // Still shown as grabbed (without following anything) while another player holds it.
-            cube.Grabbed = cubeState.IsHeld;
+            if (cubeState.HolderPlayerID == null)
+            {
+                cube.Grabbed = GrabbedState.None;
+            }
+            else if (cubeState.HolderPlayerID != LocalPlayerID)
+            {
+                cube.Grabbed = GrabbedState.AnotherPlayer;
+            }
+
 
             // Set the position if our player isn't holding the cube.
-            if (cubeState.HolderPlayerID != LocalPlayerID) // Only alter the pose if we aren't currently holding the object.
+            if (cubeState.HolderPlayerID != LocalPlayerID)
             {
                 cube.transform.SetPositionAndRotation(Conversions.ToUnityPosition(cubeState.Pose), Conversions.ToUnityRotation(cubeState.Pose));
             }

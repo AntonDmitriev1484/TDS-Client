@@ -27,7 +27,9 @@ namespace SharedLibrary.Game
         List<int> _permissionPlayerIDs = new List<int>();
         List<CubeFollowTarget> _permissionValues = new List<CubeFollowTarget>();
 
-        public double LastUpdatedServerTime;
+        public double PoseLastUpdatedServerTime; // The last time the pose was updated in server time.
+        public double GrabLastUpdatedServerTime; // The last time the grab permissions was updated in server time.
+
         public Pose Pose;
 
         /// <summary>The ID of the player holding grab permission, or null if nobody does.</summary>
@@ -59,10 +61,11 @@ namespace SharedLibrary.Game
         /// <summary>
         /// A cube that nobody holds yet. Every player gets a false grab permission entry.
         /// </summary>
-        public CubeState(string id, double lastUpdatedServerTime, Pose pose, IEnumerable<int> playerIDs)
+        public CubeState(string id, double poseLastUpdatedServerTime, double grabLastUpdatedServerTime, Pose pose, IEnumerable<int> playerIDs)
         {
             ID = id;
-            LastUpdatedServerTime = lastUpdatedServerTime;
+            PoseLastUpdatedServerTime = poseLastUpdatedServerTime;
+            GrabLastUpdatedServerTime = grabLastUpdatedServerTime;
             Pose = pose;
 
             foreach (int playerID in playerIDs)
@@ -81,7 +84,8 @@ namespace SharedLibrary.Game
             return new CubeState
             {
                 ID = ID,
-                LastUpdatedServerTime = LastUpdatedServerTime,
+                PoseLastUpdatedServerTime = PoseLastUpdatedServerTime,
+                GrabLastUpdatedServerTime = GrabLastUpdatedServerTime,
                 Pose = Pose,
                 GrabPermissions = new Dictionary<int, CubeFollowTarget>(GrabPermissions),
             };
@@ -120,5 +124,12 @@ namespace SharedLibrary.Game
         None,
         RightHand,
         LeftHand,
+    }
+
+    public enum GrabbedState
+    {
+        None,
+        OurPlayer,
+        AnotherPlayer,
     }
 }

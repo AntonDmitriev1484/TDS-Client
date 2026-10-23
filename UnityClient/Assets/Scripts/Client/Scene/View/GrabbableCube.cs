@@ -1,4 +1,7 @@
+using SharedLibrary.Game;
 using UnityEngine;
+using Quaternion = UnityEngine.Quaternion;
+using Vector3 = UnityEngine.Vector3;
 
 /// <summary>
 /// A cube whose grabbed state is set from outside (by <see cref="GameStateManager"/>, from
@@ -14,9 +17,10 @@ using UnityEngine;
 public class GrabbableCube : MonoBehaviour
 {
     [SerializeField] Color _defaultColor = new Color(0.2f, 0.6f, 1f);
-    [SerializeField] Color _grabbedColor = new Color(1f, 0.5f, 0f);
+    [SerializeField] Color _ourGrabbedColor = new Color(1f, 0.5f, 0f);
+    [SerializeField] Color _anotherGrabbedColor = new Color(1f, 0.1f, 0f);
 
-    [SerializeField] bool grabbed;
+    [SerializeField] GrabbedState grabbed;
 
     Material _material;
     Transform _followTarget;
@@ -27,13 +31,13 @@ public class GrabbableCube : MonoBehaviour
 
     public Collider Collider { get; private set; }
 
-    public bool Grabbed
+    public GrabbedState Grabbed
     {
         get => grabbed;
         set
         {
             grabbed = value;
-            if (!grabbed)
+            if (grabbed != GrabbedState.OurPlayer)
                 _followTarget = null;
             ApplyColor();
         }
@@ -61,7 +65,7 @@ public class GrabbableCube : MonoBehaviour
             return;
         }
 
-        Grabbed = true;
+        Grabbed = GrabbedState.OurPlayer;
         _followTarget = hand;
         if (hand == null)
             return;
@@ -87,7 +91,7 @@ public class GrabbableCube : MonoBehaviour
     // LateUpdate so the hand anchors have already been updated for this frame.
     void LateUpdate()
     {
-        if (!grabbed)
+        if (grabbed != GrabbedState.OurPlayer)
         {
             // Also covers the Inspector checkbox, which writes the field without the setter.
             _followTarget = null;
@@ -106,6 +110,20 @@ public class GrabbableCube : MonoBehaviour
     void ApplyColor()
     {
         if (_material != null)
-            _material.color = grabbed ? _grabbedColor : _defaultColor;
+        {
+            if (grabbed == GrabbedState.OurPlayer)
+            {
+                _material.color = _ourGrabbedColor;
+            }
+            else if (grabbed == GrabbedState.AnotherPlayer)
+            {
+                _material.color = _anotherGrabbedColor;
+            }
+            else
+            {
+                _material.color = _defaultColor;
+            }
+        }
+
     }
 }

@@ -129,7 +129,7 @@ namespace Server.Manager
             var cubes = new List<CubeState>();
             Pose[] startingPoses = GetStartingCubePoses();
             for (int i = 0; i < startingPoses.Length; i++)
-                cubes.Add(new CubeState($"cube-{i}", serverStartTime, startingPoses[i], playerIDs));
+                cubes.Add(new CubeState($"cube-{i}", serverStartTime, serverStartTime, startingPoses[i], playerIDs));
 
             GameState = new GameState(isAuthoritative: true);
             PlayerLogicalTimestamps = new Dictionary<int, long>();
@@ -248,7 +248,10 @@ namespace Server.Manager
                         }
 
                         if (drained.Count > 0)
+                        {
+                            drained.Sort((a, b) => a.Action.ServerTime.CompareTo(b.Action.ServerTime));
                             queuesSnapshot.Add(new KeyValuePair<string, List<QueuedAction>>(key, drained));
+                        }
                     }
 
                     // Process drained actions. Apply them to the authoritative GameState.
