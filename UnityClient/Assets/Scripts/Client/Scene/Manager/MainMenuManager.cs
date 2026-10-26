@@ -97,7 +97,7 @@ namespace Client.Scene.Manager
                 if (socketStarted && !ConnectionManager.Instance.IsConnected[ConnectionType.Game]
                     && !ConnectionManager.Instance.NeedsConnection[ConnectionType.Game])
                 {
-                    SetStatus("Connection failed. Trying again...", interactable: false, Color.red);
+                    SetStatus($"Connection failed to {ConnectionManager.Instance._serverUrl}. Trying again...", interactable: false, Color.red);
                     yield break;
                 }
                 yield return null;
@@ -124,7 +124,7 @@ namespace Client.Scene.Manager
                 }
                 else
                 {
-                    SetStatus("Connection failed. Trying again...", interactable: false, Color.red);
+                    SetStatus($"Connection failed to {ConnectionManager.Instance._serverUrl}. Trying again...", interactable: false, Color.red);
                 }
             }
 

@@ -81,6 +81,12 @@ namespace Server.Manager
                     firstInstanceID = gameCoordinator.GetGameIDOfFirstInstance();
                     if (firstInstanceID != null)
                     {
+                        // Dequeue each of the players being added.
+                        foreach (var playerID in playersToMatch)
+                        {
+                            DequeuePlayer(playerID);
+                        }
+
                         foreach (int playerID in playersToMatch)
                         {
                             Task addPlayerTask = gameCoordinator.AddPlayerToGame(playerID, firstInstanceID.Value);

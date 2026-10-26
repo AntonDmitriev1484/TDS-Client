@@ -38,7 +38,7 @@ namespace Client.Communication.Manager
 
 
         // URL for web server connection
-        private string _serverUrl;
+        public string _serverUrl { get; private set; }
 
         // Object for http connections
         private readonly HttpClient _httpClient = new HttpClient();

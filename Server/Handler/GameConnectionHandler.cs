@@ -303,6 +303,7 @@ namespace Server.Handler
                 return false;
             }
 
+
             Type objType = obj.GetType();
 
             MessageEnvelope<T> message = new MessageEnvelope<T>

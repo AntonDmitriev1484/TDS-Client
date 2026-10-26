@@ -1,3 +1,4 @@
+using System.Collections;
 using System.IO;
 using UnityEngine;
 
@@ -41,8 +42,7 @@ namespace Client.Communication.Config
             {
                 Instance = this;
                 DontDestroyOnLoad(gameObject);
-                LoadConfig();
-                Initialized = true;
+                StartCoroutine(LoadConfigCoroutine());
             }
             else
             {
@@ -50,59 +50,42 @@ namespace Client.Communication.Config
             }
         }
 
-        private void LoadConfig()
+        private IEnumerator LoadConfigCoroutine()
         {
-            // Path to StreamingAssets/serverconfig.json
-            configPath = Path.Combine(Application.streamingAssetsPath, "serverconfig.json");
+            string configPath = Path.Combine(Application.streamingAssetsPath, "serverconfig.json");
 
-            if (File.Exists(configPath))
+            using (var request = UnityEngine.Networking.UnityWebRequest.Get(configPath))
             {
-                try
+                yield return request.SendWebRequest();
+
+                if (request.result == UnityEngine.Networking.UnityWebRequest.Result.Success)
                 {
-                    string jsonContents = File.ReadAllText(configPath);
-                    ConfigData data = JsonUtility.FromJson<ConfigData>(jsonContents);
-
-                    if (!string.IsNullOrEmpty(data.host))
+                    try
                     {
-                        host = data.host;
-                        Debug.Log($"[ServerConfig] Successfully loaded Host: {host}");
-                    }
+                        ConfigData data = JsonUtility.FromJson<ConfigData>(request.downloadHandler.text);
 
-                    if (data.port != 0)
+                        if (!string.IsNullOrEmpty(data.host)) host = data.host;
+                        if (data.port != 0) port = data.port;
+                        if (data.reconnectDelay != 0) retryDelay = data.reconnectDelay;
+                        if (!string.IsNullOrEmpty(data.username)) username = data.username;
+                        if (!string.IsNullOrEmpty(data.password)) password = data.password;
+
+                        serverUrl = $"https://{host}:{port}";
+                        Debug.Log($"[ServerConfig] Loaded config. URL: {serverUrl}");
+                    }
+                    catch (System.Exception e)
                     {
-                        port = data.port;
-                        Debug.Log($"[ServerConfig] Successfully loaded Port: {port}");
+                        Debug.LogError($"[ServerConfig] Failed to parse config: {e.Message}");
                     }
-
-                    if (data.reconnectDelay != 0)
-                    {
-                        retryDelay = data.reconnectDelay;
-                        Debug.Log($"[ServerConfig] Successfully loaded Reconnect Delay: {retryDelay}");
-                    }
-
-                    if (!string.IsNullOrEmpty(data.username))
-                    {
-                        username = data.username;
-                        Debug.Log($"[ServerConfig] Successfully loaded Username: {username}");
-                    }
-
-                    if (!string.IsNullOrEmpty(data.password))
-                    {
-                        password = data.password;
-                        Debug.Log($"[ServerConfig] Successfully loaded Password: {password}");
-                    }
-
+                }
+                else
+                {
+                    Debug.LogWarning($"[ServerConfig] Could not load config: {request.error}. Using defaults.");
                     serverUrl = $"https://{host}:{port}";
                 }
-                catch (System.Exception e)
-                {
-                    Debug.LogError($"[ServerConfig] Failed to parse config: {e.Message}");
-                }
             }
-            else
-            {
-                Debug.LogWarning("[ServerConfig] Config file not found, using default URL.");
-            }
+
+            Initialized = true;
         }
     }
 }

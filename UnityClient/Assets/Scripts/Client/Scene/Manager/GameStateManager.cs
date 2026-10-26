@@ -45,7 +45,9 @@ namespace Client.Scene.Manager
 
 
         // DTOs arrive on the WebSocket thread; enqueued here and applied on the main thread in Update.
-        readonly ConcurrentQueue<object> _incomingMessages = new ConcurrentQueue<object>();
+        readonly ConcurrentQueue<SingleActionDTO> _incomingSingleActions = new ConcurrentQueue<SingleActionDTO>();
+        GameStateDTO _latestGameStateDTO = null;
+        readonly object _gameStateLock = new object();
 
         // Pending actions that have not yet been confirmed by the server.
         readonly Dictionary<string, List<PendingAction>> _pendingActionsByCube = new Dictionary<string, List<PendingAction>>();
@@ -151,8 +153,17 @@ namespace Client.Scene.Manager
 
         void Update()
         {
-            while (_incomingMessages.TryDequeue(out var message))
-                HandleIncomingMessage(message);
+            GameStateDTO gameStateToProcess = null;
+            lock (_gameStateLock)
+            {
+                gameStateToProcess = _latestGameStateDTO;
+                _latestGameStateDTO = null;
+            }
+            if (gameStateToProcess != null)
+                HandleIncomingMessage(gameStateToProcess);
+
+            while (_incomingSingleActions.TryDequeue(out var action))
+                HandleIncomingMessage(action);
 
             var snapshot = Interlocked.Exchange(
                 ref UpdatedCubes,
@@ -182,14 +193,32 @@ namespace Client.Scene.Manager
         #region Handle Incoming Events
 
         // Called on the WebSocket thread — only enqueue; all Unity API calls happen in Update.
-        void OnGameStateDTOReceived(GameStateDTO dto) => _incomingMessages.Enqueue(dto);
-        void OnSingleActionDTOReceived(SingleActionDTO dto) => _incomingMessages.Enqueue(dto);
+        void OnGameStateDTOReceived(GameStateDTO dto)
+        {
+            lock (_gameStateLock)
+                _latestGameStateDTO = dto; // always replace — only latest matters
+        }
+
+        void OnSingleActionDTOReceived(SingleActionDTO dto) => _incomingSingleActions.Enqueue(dto);
 
         void HandleIncomingMessage(object objDTO)
         {
 
             if (objDTO is GameStateDTO gameStateDTO)
             {
+                string cubeStateString = "";
+                foreach (CubeState cubeState in gameStateDTO.Cubes)
+                {
+                    cubeStateString += $"ID: {cubeState.ID}; permissions: ";
+                    foreach (int ID in cubeState.GrabPermissions.Keys)
+                    {
+                        cubeStateString += $"PlayerID {ID} - {cubeState.GrabPermissions[ID]}, ";
+                    }
+                    cubeStateString += "\n";
+                }
+
+                Debug.Log($"Incoming DTO:\n {cubeStateString}");
+
                 _authoritativeGameState.ApplyGameState(_estimatedRoundTripTime, gameStateDTO);
                 AcknowledgeAppliedActions(gameStateDTO.PlayerLogicalTimestamps);
                 ReconcilePredictedState();
@@ -210,13 +239,28 @@ namespace Client.Scene.Manager
         {
             GameState.ReplaceFrom(_authoritativeGameState);
 
-            foreach (var pendingActions in _pendingActionsByCube.Values)
+            string cubeStateString = "";
+            foreach (CubeState cubeState in _authoritativeGameState.Cubes.Values.ToList())
             {
-                foreach (PendingAction pendingAction in pendingActions)
+                cubeStateString += $"ID: {cubeState.ID}; permissions: ";
+                foreach (int ID in cubeState.GrabPermissions.Keys)
                 {
-                    if (!GameState.HandleSingleAction(pendingAction.Action))
-                        Debug.LogWarning($"{nameof(GameStateManager)}: pending action could not be replayed: {pendingAction.Action.FormatActionText()}");
+                    cubeStateString += $"PlayerID {ID} - {cubeState.GrabPermissions[ID]}, ";
                 }
+                cubeStateString += "\n";
+            }
+
+            Debug.Log($"Authoritative Game State:\n {cubeStateString}");
+
+            var allPending = _pendingActionsByCube.Values
+                .SelectMany(list => list)
+                .OrderBy(p => p.ClientLogicalTimestamp);
+
+
+            foreach (PendingAction pendingAction in allPending)
+            {
+                if (!GameState.HandleSingleAction(pendingAction.Action))
+                    Debug.LogWarning($"{nameof(GameStateManager)}: pending action could not be replayed: {pendingAction.Action.FormatActionText()}");
             }
         }
 
@@ -229,6 +273,8 @@ namespace Client.Scene.Manager
 
             var completedActions = new List<PendingAction>();
 
+            int remainingActionsLength = 0;
+
             foreach (var pendingActions in _pendingActionsByCube.Values.ToList())
             {
                 foreach (PendingAction pendingAction in pendingActions)
@@ -237,11 +283,20 @@ namespace Client.Scene.Manager
                     {
                         completedActions.Add(pendingAction);
                     }
+                    else
+                    {
+                        remainingActionsLength += 1;
+                    }
                 }
             }
 
             foreach (PendingAction completedAction in completedActions)
+            {
                 RemovePendingAction(completedAction);
+                Debug.Log($"Removing completed action with client logical timestamp: {completedAction.ClientLogicalTimestamp} and type: {completedAction.Action.SingleActionType}.");
+            }
+
+            Debug.Log($"Pending actions has length: {remainingActionsLength}");
         }
 
         PendingAction FindPendingAction(long clientLogicalTimestamp)

@@ -108,17 +108,13 @@ namespace SharedLibrary.Game
                     continue;
                 }
 
-                // Only update if the server time of the incoming is after the cube's current server time.
-                if (cube.PoseLastUpdatedServerTime < incoming.PoseLastUpdatedServerTime)
-                {
-                    cube.PoseLastUpdatedServerTime = incoming.PoseLastUpdatedServerTime;
-                    cube.Pose = incoming.Pose;
-                    cube.GrabPermissions = new Dictionary<int, CubeFollowTarget>(incoming.GrabPermissions);
+                cube.PoseLastUpdatedServerTime = incoming.PoseLastUpdatedServerTime;
+                cube.Pose = incoming.Pose;
+                cube.GrabPermissions = new Dictionary<int, CubeFollowTarget>(incoming.GrabPermissions);
 
-                    // Permissions first, so a client that just lost a cube drops it before the pose is applied.
-                    OnGrabPermissionsChanged.Invoke(cube);
-                    OnCubePoseChanged.Invoke(cube);
-                }
+                // Permissions first, so a client that just lost a cube drops it before the pose is applied.
+                OnGrabPermissionsChanged.Invoke(cube);
+                OnCubePoseChanged.Invoke(cube);
             }
         }
 
