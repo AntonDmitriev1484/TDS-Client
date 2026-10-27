@@ -221,7 +221,7 @@ namespace Client.Scene.Manager
 
                 _authoritativeGameState.ApplyGameState(_estimatedRoundTripTime, gameStateDTO);
                 AcknowledgeAppliedActions(gameStateDTO.PlayerLogicalTimestamps);
-                ReconcilePredictedState();
+                ApplyingPredictedState();
             }
             else if (objDTO is SingleActionDTO singleActionDTO)
             {
@@ -235,7 +235,7 @@ namespace Client.Scene.Manager
             }
         }
 
-        void ReconcilePredictedState()
+        void ApplyingPredictedState()
         {
             GameState.ReplaceFrom(_authoritativeGameState);
 

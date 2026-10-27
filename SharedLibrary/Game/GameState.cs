@@ -76,6 +76,10 @@ namespace SharedLibrary.Game
             }
         }
 
+        #endregion Initialization
+
+        #region Handle GameState
+
         /// <summary>
         /// Overwrites this game state with a snapshot from the server. Cubes not seen before are added.
         /// </summary>
@@ -156,10 +160,6 @@ namespace SharedLibrary.Game
             }
         }
 
-        #endregion Initialization
-
-        #region Handle SingleAction
-
         /// <summary>
         /// Handles an incoming single action.
         /// </summary>
@@ -216,6 +216,11 @@ namespace SharedLibrary.Game
             if (holder != null && (grabCubeAction.ServerTime - cube.GrabLastUpdatedServerTime < 2.0f))
                 return false;
 
+            foreach (int pID in cube.GrabPermissions.Keys.ToList())
+            {
+                cube.GrabPermissions[pID] = CubeFollowTarget.None;
+            }
+
             cube.GrabPermissions[playerID] = grabCubeAction.FollowTarget;
             cube.GrabLastUpdatedServerTime = grabCubeAction.ServerTime;
             OnGrabPermissionsChanged.Invoke(cube);
@@ -249,7 +254,7 @@ namespace SharedLibrary.Game
             return true;
         }
 
-        #endregion Handle SingleAction
+        #endregion Handle GameState
 
         #region Authoritative Methods
 

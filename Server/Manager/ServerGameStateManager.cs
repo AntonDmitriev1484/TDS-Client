@@ -272,11 +272,6 @@ namespace Server.Manager
                                 PlayerLogicalTimestamps[queuedAction.PlayerID] = queuedAction.ClientLogicalTimestamp;
                             }
 
-                            if (queuedAction.Action.SingleActionType == SingleActionType.ReleaseCube)
-                            {
-                                Console.WriteLine($"Game State: {JsonUtilities.ToJson(GameState)}");
-                            }
-
                             if (!successfulAction)
                             {
                                 Console.Error.WriteLine($"Incoming action did not run successfully: {queuedAction.ClientLogicalTimestamp}");
