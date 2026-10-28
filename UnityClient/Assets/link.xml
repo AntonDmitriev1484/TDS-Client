@@ -1,0 +1,6 @@
+<linker>
+    <assembly fullname="SharedLibrary" preserve="all"/>
+    <assembly fullname="Newtonsoft.Json" preserve="all"/>
+    <assembly fullname="Assembly-CSharp" preserve="all"/>
+    <assembly fullname="websocket-sharp" preserve="all"/>
+</linker>

@@ -1,1 +1,0 @@
-C:\Users\antond2\Desktop\Unity-StarterSamples\Library\Bee\Android\Prj\IL2CPP\Gradle\unityLibrary\build\intermediates\cxx\RelWithDebInfo\411z2159\obj\arm64-v8a
