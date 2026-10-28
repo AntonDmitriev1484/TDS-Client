@@ -168,6 +168,14 @@ namespace Server.Middleware
                         await gameConnectionHandler.HandleWebSocketConnection(webSocket, playerID);
                     }
                 }
+                else if (path.StartsWith(ConnectionType.SpatialSync.ToPath(), StringComparison.OrdinalIgnoreCase))
+                {
+                    using (var scope = _scopeFactory.CreateScope())
+                    {
+                        var spatialSyncConnectionHandler = scope.ServiceProvider.GetRequiredService<SpatialSyncConnectionHandler>();
+                        await spatialSyncConnectionHandler.HandleWebSocketConnection(webSocket, playerID);
+                    }
+                }
                 else
                 {
                     // Optionally handle other paths or close the connection

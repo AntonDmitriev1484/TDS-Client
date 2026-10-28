@@ -5,6 +5,7 @@ namespace SharedLibrary.Communication.Connection
     public enum ConnectionType
     {
         Game,
+        SpatialSync,
     }
 
     public static class ConnectionTypeExtensions
@@ -16,6 +17,7 @@ namespace SharedLibrary.Communication.Connection
             return connectionType switch
             {
                 ConnectionType.Game => APICallEndpoint + "/game",
+                ConnectionType.SpatialSync => APICallEndpoint + "/spatial-sync",
                 _ => throw new ArgumentOutOfRangeException(nameof(connectionType), connectionType, null)
             };
         }
