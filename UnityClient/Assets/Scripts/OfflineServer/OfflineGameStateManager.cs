@@ -1,6 +1,6 @@
 using Assets.Scripts.Utilities;
 using Client.Scene.Manager;
-using SharedLibrary.Communication.DataTransferObjects;
+using SharedLibrary.Communication.DataTransferObjects.Game;
 using SharedLibrary.Game;
 using SharedLibrary.Utilities;
 using System.Collections;

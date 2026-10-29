@@ -1,21 +1,21 @@
 using System;
 
-namespace SharedLibrary.Communication.DataTransferObjects
+namespace SharedLibrary.Communication.DataTransferObjects.Game
 {
     /// <summary>
-    /// A DTO for request to join queue by client.
+    /// A DTO for request to leave queue by client.
     /// </summary>
     [Serializable]
-    public class QueueDTO
+    public class DequeueDTO
     {
         public int PlayerID;
 
         /// <summary>
         /// Parameterless constructor for JSON deserialization between server and client.
         /// </summary>
-        public QueueDTO() { }
+        public DequeueDTO() { }
 
-        public QueueDTO(int playerID)
+        public DequeueDTO(int playerID)
         {
             PlayerID = playerID;
         }

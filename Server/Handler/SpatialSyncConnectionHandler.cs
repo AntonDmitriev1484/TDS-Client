@@ -1,6 +1,7 @@
 ﻿using Newtonsoft.Json;
 using Server.Manager;
 using SharedLibrary.Communication.DataTransferObjects;
+using SharedLibrary.Communication.DataTransferObjects.Game;
 using SharedLibrary.Utilities;
 using System.Net.WebSockets;
 using System.Text;

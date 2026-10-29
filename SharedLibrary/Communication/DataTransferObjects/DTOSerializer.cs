@@ -1,3 +1,4 @@
+using SharedLibrary.Communication.DataTransferObjects.Game;
 using SharedLibrary.Utilities;
 using System;
 

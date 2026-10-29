@@ -1,5 +1,6 @@
 using Server.Handler;
 using SharedLibrary.Communication.DataTransferObjects;
+using SharedLibrary.Communication.DataTransferObjects.Game;
 using SharedLibrary.Game;
 using SharedLibrary.Game.Actions;
 using SharedLibrary.Utilities;

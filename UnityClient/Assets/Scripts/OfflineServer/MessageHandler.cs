@@ -1,5 +1,6 @@
 using Client.Communication.Config;
 using SharedLibrary.Communication.DataTransferObjects;
+using SharedLibrary.Communication.DataTransferObjects.Game;
 using SharedLibrary.Game;
 using System;
 using System.Collections.Concurrent;

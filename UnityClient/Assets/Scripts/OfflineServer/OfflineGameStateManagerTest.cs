@@ -1,5 +1,5 @@
 using Assets.Scripts.Utilities;
-using SharedLibrary.Communication.DataTransferObjects;
+using SharedLibrary.Communication.DataTransferObjects.Game;
 using SharedLibrary.Game;
 using System.Collections;
 using System.Collections.Generic;

@@ -1,7 +1,7 @@
 using Assets.Scripts.Utilities;
 using Client.Communication.Manager;
 using SharedLibrary.Communication.Connection;
-using SharedLibrary.Communication.DataTransferObjects;
+using SharedLibrary.Communication.DataTransferObjects.Game;
 using SharedLibrary.Game;
 using SharedLibrary.Game.Actions;
 using SharedLibrary.Utilities;
@@ -30,6 +30,14 @@ namespace Client.Scene.Manager
     /// </summary>
     public class GameStateManager : MonoBehaviour
     {
+
+
+        #region Properties
+
+        public GameStateManager Instance { get; private set; }
+        public bool IsInitialized { get; private set; }
+
+
         [SerializeField] GrabbableCubeManager _cubeManager;
         [SerializeField] OVRHand _rightHand;
         [SerializeField] OVRHand _leftHand;
@@ -80,10 +88,60 @@ namespace Client.Scene.Manager
         /// </summary>
         public event Action<object> OnOutgoingDTO;
 
-        #region Unity Functions
+        #endregion Properties
 
+
+        #region Initialization
+
+
+        /// <summary>
+        /// Singleton for Spatial Synchronization Manager.
+        /// </summary>
         void Awake()
         {
+            if (Instance == null)
+            {
+                Instance = this;
+                DontDestroyOnLoad(gameObject);
+
+                // Set initial variables on spatial sync settings
+                IsInitialized = false;
+
+                // Wait for necessary objects before initializing spatial sync manager
+                StartCoroutine(WaitToInitialize());
+            }
+            else
+            {
+                Destroy(gameObject);
+            }
+        }
+
+        void OnEnable()
+        {
+            _cubeManager.PinchStarted += OnPinchStarted;
+            _cubeManager.PinchEnded += OnPinchEnded;
+        }
+
+        void OnDisable()
+        {
+            _cubeManager.PinchStarted -= OnPinchStarted;
+            _cubeManager.PinchEnded -= OnPinchEnded;
+        }
+
+        IEnumerator WaitToInitialize()
+        {
+            // Wait for ConnectionManager to finish initializing before subscribing to its events.
+            while (ConnectionManager.Instance == null || !ConnectionManager.Instance.IsInitialized)
+                yield return null;
+
+            Initialize();
+        }
+
+
+        /// <summary>Sets which player this client acts for. Call before the first game state arrives.</summary>
+        void Initialize()
+        {
+            LocalPlayerID = ConnectionManager.Instance.PlayerID;
             if (_cubeManager == null)
                 _cubeManager = GetComponent<GrabbableCubeManager>();
             if (_cubeManager == null)
@@ -111,45 +169,29 @@ namespace Client.Scene.Manager
             GameState.OnCubeAdded += HandleCubeAdded;
             GameState.OnGrabPermissionsChanged += FlagCubeStateChanged;
             GameState.OnCubePoseChanged += FlagCubeStateChanged;
-        }
 
-        void OnEnable()
-        {
-            _cubeManager.PinchStarted += OnPinchStarted;
-            _cubeManager.PinchEnded += OnPinchEnded;
-        }
-
-        void OnDisable()
-        {
-            _cubeManager.PinchStarted -= OnPinchStarted;
-            _cubeManager.PinchEnded -= OnPinchEnded;
-        }
-
-        IEnumerator Start()
-        {
-            // Wait for ConnectionManager to finish initializing before subscribing to its events.
-            while (ConnectionManager.Instance == null || !ConnectionManager.Instance.IsInitialized)
-                yield return null;
-
-            var cm = ConnectionManager.Instance;
-            Initialize(cm.PlayerID);
-
-            if (cm.InboundMessagesDict.TryGetValue(typeof(GameStateDTO), out var gsEvent))
+            if (ConnectionManager.Instance.InboundMessagesDict.TryGetValue(typeof(GameStateDTO), out var gsEvent))
                 ((UnityEvent<GameStateDTO>)gsEvent).AddListener(OnGameStateDTOReceived);
-            if (cm.InboundMessagesDict.TryGetValue(typeof(SingleActionDTO), out var saEvent))
+            if (ConnectionManager.Instance.InboundMessagesDict.TryGetValue(typeof(SingleActionDTO), out var saEvent))
                 ((UnityEvent<SingleActionDTO>)saEvent).AddListener(OnSingleActionDTOReceived);
+
+
+            IsInitialized = true;
         }
 
         void OnDestroy()
         {
-            var cm = ConnectionManager.Instance;
-            if (cm == null || cm.InboundMessagesDict == null) return;
+            if (ConnectionManager.Instance == null || ConnectionManager.Instance.InboundMessagesDict == null) return;
 
-            if (cm.InboundMessagesDict.TryGetValue(typeof(GameStateDTO), out var gsEvent))
+            if (ConnectionManager.Instance.InboundMessagesDict.TryGetValue(typeof(GameStateDTO), out var gsEvent))
                 ((UnityEvent<GameStateDTO>)gsEvent).RemoveListener(OnGameStateDTOReceived);
-            if (cm.InboundMessagesDict.TryGetValue(typeof(SingleActionDTO), out var saEvent))
+            if (ConnectionManager.Instance.InboundMessagesDict.TryGetValue(typeof(SingleActionDTO), out var saEvent))
                 ((UnityEvent<SingleActionDTO>)saEvent).RemoveListener(OnSingleActionDTOReceived);
         }
+
+        #endregion Initialization
+
+        #region Update Loop
 
         void Update()
         {
@@ -182,13 +224,8 @@ namespace Client.Scene.Manager
             SendHeldCubePoses();
         }
 
-        #endregion Unity Functions
 
-        /// <summary>Sets which player this client acts for. Call before the first game state arrives.</summary>
-        public void Initialize(int localPlayerID)
-        {
-            LocalPlayerID = localPlayerID;
-        }
+        #endregion Update Loop
 
         #region Handle Incoming Events
 
@@ -339,7 +376,7 @@ namespace Client.Scene.Manager
 
         #endregion Handle Incoming Events
 
-        #region Handle Game Master Events
+        #region Handle GameState Events
 
         void HandleCubeAdded(CubeState state)
         {
@@ -406,7 +443,7 @@ namespace Client.Scene.Manager
             }
         }
 
-        #endregion Handle Game Master Events
+        #endregion Handle GameState Events
 
         #region Handle Our Actions
 

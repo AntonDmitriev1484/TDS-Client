@@ -1,6 +1,6 @@
 using Client.Communication.Manager;
 using SharedLibrary.Communication.Connection;
-using SharedLibrary.Communication.DataTransferObjects;
+using SharedLibrary.Communication.DataTransferObjects.Game;
 using System.Collections;
 using TMPro;
 using UnityEngine;
