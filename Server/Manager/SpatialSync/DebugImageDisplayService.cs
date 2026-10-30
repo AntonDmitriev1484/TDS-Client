@@ -15,6 +15,9 @@ namespace Server.Manager.SpatialSync
         /// </summary>
         private const bool FlipVertically = false;
 
+        // Key in _windows for the global map window (player IDs are positive, so this never clashes).
+        private const int MapWindowKey = int.MinValue;
+
         public DebugImageDisplayService()
         {
             _uiThread = new Thread(RunMessageLoop)
@@ -46,6 +49,29 @@ namespace Server.Manager.SpatialSync
             try
             {
                 _dispatcher.BeginInvoke(() => UpdatePlayerWindow(playerID, bitmap));
+            }
+            catch (InvalidOperationException)
+            {
+                // The UI thread shut down between the check and the post.
+                bitmap.Dispose();
+            }
+        }
+
+        /// <summary>
+        /// Show the global map (top-down view of every player's key frames and map points) in its own window. Call it every
+        /// time the map has been updated; the window is created on first use and then refreshed in place.
+        /// </summary>
+        public void ShowMap(GlobalMapSnapshot snapshot)
+        {
+            if (_disposed || _dispatcher is null || _dispatcher.IsDisposed)
+                return;
+
+            // Draw here (the caller's thread) so the UI thread only has to swap the picture.
+            Bitmap bitmap = GlobalMapRenderer.Render(snapshot);
+
+            try
+            {
+                _dispatcher.BeginInvoke(() => UpdateMapWindow(bitmap));
             }
             catch (InvalidOperationException)
             {
@@ -120,7 +146,33 @@ namespace Server.Manager.SpatialSync
             window.Text = $"Player {playerID} - Key frame";
         }
 
+        private void UpdateMapWindow(Bitmap bitmap)
+        {
+            if (_disposed)
+            {
+                bitmap.Dispose();
+                return;
+            }
+
+            if (!_windows.TryGetValue(MapWindowKey, out Form? window) || window.IsDisposed)
+            {
+                window = CreateWindow(MapWindowKey, "Global map", 1020, 860);
+                _windows[MapWindowKey] = window;
+                window.Show();
+            }
+
+            var pictureBox = (PictureBox)window.Controls[0];
+            Image? previousImage = pictureBox.Image;
+            pictureBox.Image = bitmap;
+            previousImage?.Dispose();
+        }
+
         private Form CreatePlayerWindow(int playerID)
+        {
+            return CreateWindow(playerID, $"Player {playerID} - Key frame", 800, 600);
+        }
+
+        private Form CreateWindow(int key, string title, int width, int height)
         {
             var pictureBox = new PictureBox
             {
@@ -131,13 +183,13 @@ namespace Server.Manager.SpatialSync
 
             var window = new Form
             {
-                Text = $"Player {playerID} - Key frame",
-                Width = 800,
-                Height = 600,
+                Text = title,
+                Width = width,
+                Height = height,
                 StartPosition = FormStartPosition.CenterScreen
             };
             window.Controls.Add(pictureBox);
-            window.FormClosed += (_, _) => _windows.Remove(playerID);
+            window.FormClosed += (_, _) => _windows.Remove(key);
             return window;
         }
 
