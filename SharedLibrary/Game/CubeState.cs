@@ -32,6 +32,14 @@ namespace SharedLibrary.Game
 
         public Pose Pose;
 
+        /// <summary>Edge length of the cube (meters).</summary>
+        public float CubeSize = DefaultCubeSize;
+
+        public const float DefaultCubeSize = 0.2f;
+
+        /// <summary>The <see cref="BoardState"/> grid cell (x, z) the cube spawned on.</summary>
+        public (int X, int Z) GridLocation;
+
         /// <summary>The ID of the player holding grab permission, or null if nobody does.</summary>
         public int? HolderPlayerID
         {
@@ -72,6 +80,17 @@ namespace SharedLibrary.Game
                 GrabPermissions[playerID] = CubeFollowTarget.None;
         }
 
+        /// <summary>
+        /// A cube that nobody holds yet, spawned on <paramref name="gridLocation"/> of the board.
+        /// </summary>
+        public CubeState(string id, double poseLastUpdatedServerTime, double grabLastUpdatedServerTime, Pose pose, IEnumerable<int> playerIDs,
+            (int X, int Z) gridLocation, float cubeSize = DefaultCubeSize)
+            : this(id, poseLastUpdatedServerTime, grabLastUpdatedServerTime, pose, playerIDs)
+        {
+            GridLocation = gridLocation;
+            CubeSize = cubeSize;
+        }
+
         #endregion Constructors
 
         public bool HasGrabPermission(int playerID) => GrabPermissions.TryGetValue(playerID, out CubeFollowTarget allowed) && allowed != CubeFollowTarget.None;
@@ -87,6 +106,8 @@ namespace SharedLibrary.Game
                 PoseLastUpdatedServerTime = PoseLastUpdatedServerTime,
                 GrabLastUpdatedServerTime = GrabLastUpdatedServerTime,
                 Pose = Pose,
+                CubeSize = CubeSize,
+                GridLocation = GridLocation,
                 GrabPermissions = new Dictionary<int, CubeFollowTarget>(GrabPermissions),
             };
         }

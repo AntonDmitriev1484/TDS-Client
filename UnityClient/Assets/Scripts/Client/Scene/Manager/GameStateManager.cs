@@ -31,6 +31,7 @@ namespace Client.Scene.Manager
     public class GameStateManager : MonoBehaviour
     {
         [SerializeField] GrabbableCubeManager _cubeManager;
+        [SerializeField] GameBoardView _boardView;
         [SerializeField] OVRHand _rightHand;
         [SerializeField] OVRHand _leftHand;
 
@@ -88,6 +89,10 @@ namespace Client.Scene.Manager
                 _cubeManager = GetComponent<GrabbableCubeManager>();
             if (_cubeManager == null)
                 _cubeManager = FindFirstObjectByType<GrabbableCubeManager>();
+            if (_boardView == null)
+                _boardView = GetComponent<GameBoardView>();
+            if (_boardView == null)
+                _boardView = gameObject.AddComponent<GameBoardView>();
 
             foreach (OVRHand hand in FindObjectsByType<OVRHand>(FindObjectsSortMode.None))
             {
@@ -109,6 +114,7 @@ namespace Client.Scene.Manager
             GameState = new GameState(isAuthoritative: false);
             _authoritativeGameState = new GameState(isAuthoritative: false);
             GameState.OnCubeAdded += HandleCubeAdded;
+            GameState.OnCubeRemoved += HandleCubeRemoved;
             GameState.OnGrabPermissionsChanged += FlagCubeStateChanged;
             GameState.OnCubePoseChanged += FlagCubeStateChanged;
         }
@@ -222,6 +228,7 @@ namespace Client.Scene.Manager
                 _authoritativeGameState.ApplyGameState(_estimatedRoundTripTime, gameStateDTO);
                 AcknowledgeAppliedActions(gameStateDTO.PlayerLogicalTimestamps);
                 ApplyingPredictedState();
+                _boardView.Apply(GameState.Board, GameState.Goals.Values, GameState.Scores);
             }
             else if (objDTO is SingleActionDTO singleActionDTO)
             {
@@ -343,8 +350,18 @@ namespace Client.Scene.Manager
 
         void HandleCubeAdded(CubeState state)
         {
-            _cubeManager.SpawnCube(Conversions.ToUnityPose(state.Pose), state.ID);
+            _cubeManager.SpawnCube(Conversions.ToUnityPose(state.Pose), state.ID, state.CubeSize);
             FlagCubeStateChanged(state);
+        }
+
+        /// <summary>
+        /// The server removed a cube (e.g. it scored): destroy it and forget any actions on it.
+        /// </summary>
+        void HandleCubeRemoved(CubeState state)
+        {
+            UpdatedCubes.TryRemove(state.ID, out _);
+            _pendingActionsByCube.Remove(state.ID);
+            _cubeManager.DestroyCube(state.ID);
         }
 
         /// <summary>

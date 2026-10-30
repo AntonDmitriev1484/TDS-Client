@@ -12,10 +12,11 @@ using System.Threading;
 using UnityEngine;
 
 /// <summary>
-/// Handles inbound messages for the offline game server, the way the server's GameWebSocketHandler
-/// does: it accepts player connections, routes each DTO to its handler, validates it, and applies
-/// it to <see cref="OfflineGameStateManager"/>'s game state. It also keeps the player ID to connection
-/// map and does the sending, which the server splits out into WebSocketConnectionManager.
+/// Handles inbound messages for the offline game server, the way the server's GameConnectionHandler
+/// does: it accepts player connections, routes each DTO to its handler, validates it, and enqueues
+/// actions on <see cref="OfflineGameStateManager"/>, whose state sync loop applies them. It also keeps
+/// the player ID to connection map and does the sending, which the server splits out into
+/// GameConnectionManager.
 ///
 /// Players connect over TCP and exchange newline-delimited JSON (one <see cref="DTOSerializer"/>
 /// message per line). The first message on a connection must be a <see cref="QueueDTO"/>.
@@ -41,7 +42,6 @@ public class MessageHandler : MonoBehaviour
 
     readonly List<Connection> _connections = new List<Connection>(); // Every open socket; locked.
     readonly Dictionary<int, Connection> _connectionsByPlayerID = new Dictionary<int, Connection>(); // Main thread only.
-    public Dictionary<int, long> PlayerLogicalTimestamps = new Dictionary<int, long>();
 
     TcpListener _listener;
     Thread _acceptThread;
@@ -89,8 +89,13 @@ public class MessageHandler : MonoBehaviour
         {
             // Allow ServerConfig to override inspector values
             var cfg = ServerConfig.Instance;
-            string bindHost = !string.IsNullOrEmpty(cfg.Host) ? cfg.Host : _host;
-            int bindPort = cfg.Port != 0 ? cfg.Port : _port;
+            bool configLoaded = cfg != null && cfg.Initialized;
+            string bindHost = configLoaded && !string.IsNullOrEmpty(cfg.Host) ? cfg.Host : _host;
+            int bindPort = configLoaded && cfg.Port != 0 ? cfg.Port : _port;
+
+            // Local test: the client is in this app and connects over loopback, whatever host is configured.
+            if (configLoaded && cfg.IsLocalTest)
+                bindHost = IPAddress.Loopback.ToString();
 
             IPAddress bindAddr = IPAddress.Any;
             if (!string.IsNullOrEmpty(bindHost))
@@ -103,6 +108,7 @@ public class MessageHandler : MonoBehaviour
             }
             _listener = new TcpListener(bindAddr, bindPort);
             _listener.Start();
+            _port = bindPort;
         }
         catch (SocketException e)
         {
@@ -305,17 +311,15 @@ public class MessageHandler : MonoBehaviour
     }
 
     /// <summary>
-    /// Processes an incoming single action DTO. Accepted actions go to the other players; a rejected
-    /// one gets the sender a full game state so their client can correct itself.
+    /// Processes an incoming single action DTO by enqueuing it for the authoritative game loop, as
+    /// the server does. The loop applies it on the next tick, and the game state it broadcasts tells
+    /// every player the outcome.
     /// </summary>
     /// <param name="playerID">The player the connection belongs to.</param>
     /// <param name="actionDTO">The single action DTO.</param>
     void ProcessSingleAction(int playerID, SingleActionDTO actionDTO)
     {
-        GameState gameState = _gameStateManager.GameState;
-        double serverTime = _gameStateManager.ServerTime;
-
-        if (gameState == null)
+        if (_gameStateManager.GameState == null)
         {
             Debug.LogWarning($"{nameof(MessageHandler)}: action from player {playerID} arrived before the game started.");
             return;
@@ -324,23 +328,11 @@ public class MessageHandler : MonoBehaviour
         if (actionDTO.Action.PlayerID != playerID)
         {
             Debug.LogWarning($"{nameof(MessageHandler)}: DTO's player ID does not match the connection's player ID.");
-            _gameStateManager.AddOutgoingDTO(playerID, new GameStateDTO(serverTime, PlayerLogicalTimestamps, gameState));
             return;
         }
 
-        if (!gameState.HandleSingleAction(actionDTO.Action))
-        {
-            Debug.Log($"{nameof(MessageHandler)}: rejected {actionDTO.Action.FormatActionText()}");
-            _gameStateManager.AddOutgoingDTO(playerID, new GameStateDTO(serverTime, PlayerLogicalTimestamps, gameState));
-            return;
-        }
-
-        // Send info about the action to the other players.
-        foreach (int otherPlayerID in gameState.PlayerIDs)
-        {
-            if (otherPlayerID != playerID)
-                _gameStateManager.AddOutgoingDTO(otherPlayerID, actionDTO);
-        }
+        // Enqueue the action to be processed by the authoritative game loop.
+        _gameStateManager.EnqueueSingleAction(actionDTO.Action, actionDTO.ClientLogicalTimestamp, playerID);
     }
 
     #endregion Process DTOs

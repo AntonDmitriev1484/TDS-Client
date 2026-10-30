@@ -21,6 +21,15 @@ namespace SharedLibrary.Game
         public List<int> PlayerIDs { get; } = new List<int>();
         public Dictionary<string, CubeState> Cubes { get; } = new Dictionary<string, CubeState>();
 
+        /// <summary>The current round, starting at 1. Each score advances it by one.</summary>
+        public int Round { get; set; } = 1;
+        /// <summary>Score per player. The key is the player ID.</summary>
+        public Dictionary<int, int> Scores { get; } = new Dictionary<int, int>();
+        /// <summary>Each player's goal. The key is the player ID.</summary>
+        public Dictionary<int, GoalCubeState> Goals { get; } = new Dictionary<int, GoalCubeState>();
+        /// <summary>The board cubes spawn on; null until the game starts.</summary>
+        public BoardState Board { get; set; }
+
         public double GameStartTime { get; set; }
         public double ServerClockOffset { get; set; }
         public double CurrentAppliedOffset { get; set; }
@@ -36,6 +45,7 @@ namespace SharedLibrary.Game
         #region Events
 
         public event Action<CubeState> OnCubeAdded = delegate { };
+        public event Action<CubeState> OnCubeRemoved = delegate { };
         public event Action<CubeState> OnGrabPermissionsChanged = delegate { };
         public event Action<CubeState> OnCubePoseChanged = delegate { };
         public event Action<SingleAction> PostHandleActionEvent = delegate { };
@@ -58,9 +68,10 @@ namespace SharedLibrary.Game
         #region Initialization
 
         /// <summary>
-        /// Server only: sets up the players and the starting cubes.
+        /// Server only: sets up the players, the starting cubes, the board and the goals. Every player
+        /// and every goal's player starts on a score of 0.
         /// </summary>
-        public void ServerInitialize(IEnumerable<int> playerIDs, IEnumerable<CubeState> cubes)
+        public void ServerInitialize(IEnumerable<int> playerIDs, IEnumerable<CubeState> cubes, BoardState board = null, IEnumerable<GoalCubeState> goals = null)
         {
             if (!IsAuthoritative)
                 throw new InvalidOperationException("Only the authoritative game state can initialize the game.");
@@ -68,12 +79,23 @@ namespace SharedLibrary.Game
             PlayerIDs.Clear();
             PlayerIDs.AddRange(playerIDs);
 
+            Round = 1;
+            Board = board;
+
+            Goals.Clear();
+            if (goals != null)
+            {
+                foreach (GoalCubeState goal in goals)
+                    Goals.Add(goal.PlayerID, goal);
+            }
+
+            Scores.Clear();
+            foreach (int playerID in PlayerIDs.Concat(Goals.Keys))
+                Scores[playerID] = 0;
+
             Cubes.Clear();
             foreach (CubeState cube in cubes)
-            {
-                Cubes.Add(cube.ID, cube);
-                OnCubeAdded.Invoke(cube);
-            }
+                AddCube(cube);
         }
 
         #endregion Initialization
@@ -101,6 +123,12 @@ namespace SharedLibrary.Game
                 LatestOffsetUpdateTime = TimeUtilities.GetTime();
             }
 
+            Round = gameStateDTO.Round;
+            CopyScoresAndGoals(gameStateDTO.Scores, gameStateDTO.Goals.Values, gameStateDTO.Board);
+
+            var incomingCubeIDs = new HashSet<string>(gameStateDTO.Cubes.Select(cube => cube.ID));
+            foreach (string cubeID in Cubes.Keys.Where(id => !incomingCubeIDs.Contains(id)).ToList())
+                RemoveCube(cubeID);
 
             foreach (CubeState incoming in gameStateDTO.Cubes)
             {
@@ -135,11 +163,13 @@ namespace SharedLibrary.Game
             ServerClockOffset = authoritativeState.ServerClockOffset;
             CurrentAppliedOffset = authoritativeState.CurrentAppliedOffset;
             LatestOffsetUpdateTime = authoritativeState.LatestOffsetUpdateTime;
+            Round = authoritativeState.Round;
+            CopyScoresAndGoals(authoritativeState.Scores, authoritativeState.Goals.Values, authoritativeState.Board);
 
             foreach (string cubeID in new List<string>(Cubes.Keys))
             {
                 if (!authoritativeState.Cubes.ContainsKey(cubeID))
-                    Cubes.Remove(cubeID);
+                    RemoveCube(cubeID);
             }
 
             foreach (CubeState authoritativeCube in authoritativeState.Cubes.Values)
@@ -158,6 +188,19 @@ namespace SharedLibrary.Game
                 OnGrabPermissionsChanged.Invoke(cube);
                 OnCubePoseChanged.Invoke(cube);
             }
+        }
+
+        void CopyScoresAndGoals(Dictionary<int, int> scores, IEnumerable<GoalCubeState> goals, BoardState board)
+        {
+            Scores.Clear();
+            foreach (var kvp in scores)
+                Scores[kvp.Key] = kvp.Value;
+
+            Goals.Clear();
+            foreach (GoalCubeState goal in goals)
+                Goals[goal.PlayerID] = goal.GetDeepCopy();
+
+            Board = board?.GetDeepCopy();
         }
 
         /// <summary>
@@ -184,6 +227,7 @@ namespace SharedLibrary.Game
             {
                 successfulAction = HandleMoveAction(moveCubeAction, cube);
             }
+            // A ScoreAction is never accepted here: only the server creates and applies them.
 
             if (successfulAction)
                 PostHandleActionEvent.Invoke(singleAction);
@@ -279,6 +323,51 @@ namespace SharedLibrary.Game
             return true;
         }
 
+        /// <summary>
+        /// Server only: adds a cube to the game. Clients learn of it through the next game state update.
+        /// </summary>
+        public void ServerAddCube(CubeState cube)
+        {
+            if (!IsAuthoritative)
+                throw new InvalidOperationException("Only the authoritative game state can add cubes.");
+
+            AddCube(cube);
+        }
+
+        /// <summary>
+        /// Server only: removes a cube from the game. Clients learn of this through the next game
+        /// state update and destroy the cube.
+        /// </summary>
+        /// <returns>True if the cube existed.</returns>
+        public bool ServerRemoveCube(string cubeID)
+        {
+            if (!IsAuthoritative)
+                throw new InvalidOperationException("Only the authoritative game state can remove cubes.");
+
+            return RemoveCube(cubeID);
+        }
+
         #endregion Authoritative Methods
+
+        #region Cubes
+
+        void AddCube(CubeState cube)
+        {
+            Cubes.Add(cube.ID, cube);
+            OnCubeAdded.Invoke(cube);
+        }
+
+        bool RemoveCube(string cubeID)
+        {
+            if (!Cubes.TryGetValue(cubeID, out CubeState cube))
+                return false;
+
+            Cubes.Remove(cubeID);
+            OnCubeRemoved.Invoke(cube);
+
+            return true;
+        }
+
+        #endregion Cubes
     }
 }

@@ -109,6 +109,6 @@ public class OfflineGameStateManagerTest : OfflineGameStateManager
     void SendGameState()
     {
         foreach (int playerID in GameState.PlayerIDs)
-            AddOutgoingDTO(playerID, new GameStateDTO(ServerTime, _messageHandler.PlayerLogicalTimestamps, GameState));
+            AddOutgoingDTO(playerID, new GameStateDTO(ServerTime, PlayerLogicalTimestamps, GameState));
     }
 }

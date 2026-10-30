@@ -69,5 +69,6 @@ namespace SharedLibrary.Game.Actions
         GrabCube,
         ReleaseCube,
         MoveCube,
+        Score,
     }
 }

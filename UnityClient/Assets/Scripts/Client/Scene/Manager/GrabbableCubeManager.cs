@@ -21,7 +21,8 @@ namespace Client.Scene.Manager
     /// </summary>
     public class GrabbableCubeManager : MonoBehaviour
     {
-        [SerializeField] float _cubeSize = 0.25f;
+        [Tooltip("Edge length of spawned cubes when no size is given (meters).")]
+        [SerializeField] float _cubeSize = 0.2f;
         [SerializeField] Color _cubeColor = new Color(0.2f, 0.6f, 1f);
 
         [Tooltip("How far outside a cube's surface a hand point still counts as touching it (meters).")]
@@ -75,9 +76,10 @@ namespace Client.Scene.Manager
 
         /// <summary>
         /// Creates a cube at <paramref name="pose"/>. Pass an <paramref name="id"/> to use one
-        /// assigned elsewhere (e.g. by a server); otherwise one is generated.
+        /// assigned elsewhere (e.g. by a server); otherwise one is generated. Pass a
+        /// <paramref name="size"/> to override <see cref="CubeSize"/>.
         /// </summary>
-        public GrabbableCube SpawnCube(Pose pose, string id = null)
+        public GrabbableCube SpawnCube(Pose pose, string id = null, float? size = null)
         {
             id ??= NextFreeId();
             if (_cubes.ContainsKey(id))
@@ -86,7 +88,7 @@ namespace Client.Scene.Manager
             var go = GameObject.CreatePrimitive(PrimitiveType.Cube);
             go.name = $"GrabbableCube ({id})";
             go.transform.SetPositionAndRotation(pose.position, pose.rotation);
-            go.transform.localScale = Vector3.one * _cubeSize;
+            go.transform.localScale = Vector3.one * (size ?? _cubeSize);
 
             // Kinematic so it stays put when released: there is no physical floor in passthrough.
             var body = go.AddComponent<Rigidbody>();

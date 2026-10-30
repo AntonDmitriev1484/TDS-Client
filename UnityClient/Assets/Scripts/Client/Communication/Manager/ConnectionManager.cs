@@ -7,6 +7,8 @@ using SharedLibrary.Utilities;
 using System;
 using System.Collections;
 using System.Collections.Generic;
+using System.IO;
+using System.Net;
 using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Net.Sockets;
@@ -17,6 +19,7 @@ using System.Threading.Tasks;
 using UnityEngine;
 using UnityEngine.Events;
 using WebSocketSharp;
+using ErrorEventArgs = WebSocketSharp.ErrorEventArgs;
 using Stopwatch = System.Diagnostics.Stopwatch;
 
 
@@ -59,6 +62,17 @@ namespace Client.Communication.Manager
         private Dictionary<ConnectionType, Coroutine> LatencyMeasurementCoroutines { get; set; }
         private Dictionary<ConnectionType, double> RttTotalsMilliseconds { get; set; }
         private Dictionary<ConnectionType, int> RttSampleCounts { get; set; }
+
+        /// <summary>
+        /// In local test mode the game connection is a loopback TCP socket to the in-app
+        /// OfflineGameStateManager instead of a WebSocket to the server.
+        /// </summary>
+        public bool IsLocalTest => ServerConfig.Instance != null && ServerConfig.Instance.IsLocalTest;
+
+        // Local test game connection: newline-delimited DTOSerializer JSON, as MessageHandler expects.
+        private TcpClient _localGameClient;
+        private StreamWriter _localGameWriter;
+        private readonly object _localGameLock = new object();
 
         #endregion Properties
 
@@ -122,6 +136,15 @@ namespace Client.Communication.Manager
         {
             InitializeServerVariables();
             InitializeWebSocketEvents();
+
+            if (IsLocalTest)
+            {
+                // No server to log in to: the offline game's only player is player 0.
+                PlayerID = 0;
+                IsInitialized = true;
+                Debug.Log("Server Manager initialized in local test mode as player 0.");
+                yield break;
+            }
 
             while (!IsInitialized)
             {
@@ -501,6 +524,9 @@ namespace Client.Communication.Manager
         /// <param name="connectionType">The type of connection channel to establish with the web server.</param>
         public async Task<bool> ConnectWebSocket(ConnectionType connectionType)
         {
+            if (IsLocalTest && connectionType == ConnectionType.Game)
+                return await ConnectLocalGame();
+
             NeedsConnection[connectionType] = true;
             string baseUrl = _serverUrl.Replace("http://", "ws://").Replace("https://", "wss://");
 
@@ -795,6 +821,9 @@ namespace Client.Communication.Manager
         /// <returns>Returns true if web socket closed properly, or was already closed. Otherwise, returns false.</returns>
         public async Task<bool> CloseWebSocket(ConnectionType connectionType)
         {
+            if (IsLocalTest && connectionType == ConnectionType.Game)
+                return CloseLocalGame();
+
             this.NeedsConnection[connectionType] = false;
             MainThreadDispatcher.Enqueue(() => StopLatencyMeasurement(connectionType));
 
@@ -890,6 +919,9 @@ namespace Client.Communication.Manager
         /// <returns>True if the web socket was able to send the Data Transfer Object. False otherwise.</returns>
         public async Task<bool> SendDTO<T>(ConnectionType connectionType, T data)
         {
+            if (IsLocalTest && connectionType == ConnectionType.Game)
+                return SendLocalGame(data);
+
             WebSocket webSocket = this.GetWebSocket(connectionType);
 
             if (webSocket != null)
@@ -1006,28 +1038,8 @@ namespace Client.Communication.Manager
                     Debug.LogError($"Error deserializing message of type {type.Name}: {ex.Message}");
                 }
 
-                // Invoke the registered UnityEvent for this type.
-                if (typedData != null && this.InboundMessagesDict.TryGetValue(type, out var unityEventObj))
-                {
-                    var genericUnityEventType = typeof(UnityEvent<>).MakeGenericType(type);
-
-                    if (genericUnityEventType.IsInstanceOfType(unityEventObj))
-                    {
-                        try
-                        {
-                            var invokeMethod = genericUnityEventType.GetMethod("Invoke");
-                            invokeMethod.Invoke(unityEventObj, new[] { typedData });
-                        }
-                        catch (Exception ex)
-                        {
-                            Debug.LogError($"Error invoking UnityEvent: {ex.Message}");
-                        }
-                    }
-                    else
-                    {
-                        Debug.LogError($"UnityEvent for type {type} not found or mismatched.");
-                    }
-                }
+                if (typedData != null)
+                    DispatchInboundMessage(typedData);
 
             }
             catch (Exception ex)
@@ -1036,7 +1048,183 @@ namespace Client.Communication.Manager
             }
         }
 
+        /// <summary>
+        /// Invokes the registered UnityEvent for the message's type.
+        /// </summary>
+        private void DispatchInboundMessage(object typedData)
+        {
+            Type type = typedData.GetType();
+
+            if (!this.InboundMessagesDict.TryGetValue(type, out var unityEventObj))
+                return;
+
+            var genericUnityEventType = typeof(UnityEvent<>).MakeGenericType(type);
+
+            if (genericUnityEventType.IsInstanceOfType(unityEventObj))
+            {
+                try
+                {
+                    var invokeMethod = genericUnityEventType.GetMethod("Invoke");
+                    invokeMethod.Invoke(unityEventObj, new[] { typedData });
+                }
+                catch (Exception ex)
+                {
+                    Debug.LogError($"Error invoking UnityEvent: {ex.Message}");
+                }
+            }
+            else
+            {
+                Debug.LogError($"UnityEvent for type {type} not found or mismatched.");
+            }
+        }
+
         #endregion Web Socket
+
+        #region Local Test Connection
+
+        /// <summary>
+        /// Connects the game connection to the in-app OfflineGameStateManager's MessageHandler over
+        /// loopback TCP, retrying until it is listening. Connecting also sends the
+        /// <see cref="QueueDTO"/> that identifies this player, so the game starts right away.
+        /// </summary>
+        private async Task<bool> ConnectLocalGame()
+        {
+            ConnectionType connectionType = ConnectionType.Game;
+            NeedsConnection[connectionType] = true;
+            int port = ServerConfig.Instance.Port;
+
+            while (NeedsConnection[connectionType] && !IsConnected[connectionType])
+            {
+                var client = new TcpClient();
+                try
+                {
+                    await client.ConnectAsync(IPAddress.Loopback, port);
+                }
+                catch (SocketException ex)
+                {
+                    client.Close();
+                    MainThreadDispatcher.Enqueue(() =>
+                    {
+                        Debug.LogWarning($"Local test game connection to {IPAddress.Loopback}:{port} failed ({ex.Message}). Retrying...");
+                    });
+                    await Task.Delay(this.RetryConnectionDelaySeconds * 1000);
+                    continue;
+                }
+
+                lock (_localGameLock)
+                {
+                    _localGameClient = client;
+                    // No BOM: the other end parses each line as JSON.
+                    _localGameWriter = new StreamWriter(client.GetStream(), new UTF8Encoding(false)) { AutoFlush = true };
+                }
+
+                // Same process, so there is no meaningful latency.
+                EstimatedLatencyDict[connectionType] = 0f;
+                IsConnected[connectionType] = true;
+                new Thread(() => ReceiveLocalGameLoop(client)) { IsBackground = true, Name = "Local test game connection" }.Start();
+
+                MainThreadDispatcher.Enqueue(() =>
+                {
+                    Debug.Log($"Local test game connection opened to {IPAddress.Loopback}:{port}.");
+                });
+
+                SendLocalGame(new QueueDTO(PlayerID));
+            }
+
+            return true;
+        }
+
+        private void ReceiveLocalGameLoop(TcpClient client)
+        {
+            try
+            {
+                using var reader = new StreamReader(client.GetStream(), Encoding.UTF8);
+                string line;
+                while ((line = reader.ReadLine()) != null)
+                {
+                    if (string.IsNullOrWhiteSpace(line))
+                        continue;
+
+                    try
+                    {
+                        DispatchInboundMessage(DTOSerializer.Deserialize(line));
+                    }
+                    catch (Exception ex)
+                    {
+                        MainThreadDispatcher.Enqueue(() =>
+                        {
+                            Debug.LogError($"Error deserializing local test message: {ex.Message}");
+                        });
+                    }
+                }
+            }
+            catch (IOException) { } // Connection dropped or closed.
+            catch (ObjectDisposedException) { }
+
+            lock (_localGameLock)
+            {
+                // A newer connection may already have replaced this one.
+                if (_localGameClient != client)
+                    return;
+
+                _localGameClient = null;
+                _localGameWriter = null;
+            }
+
+            client.Close();
+            IsConnected[ConnectionType.Game] = false;
+
+            if (NeedsConnection[ConnectionType.Game])
+            {
+                MainThreadDispatcher.Enqueue(() =>
+                {
+                    Debug.LogWarning("Local test game connection closed. Reconnecting...");
+                });
+                _ = ConnectLocalGame();
+            }
+        }
+
+        private bool SendLocalGame(object dto)
+        {
+            lock (_localGameLock)
+            {
+                if (_localGameWriter == null)
+                {
+                    Debug.LogError("Local test game connection is not connected.");
+                    return false;
+                }
+
+                try
+                {
+                    _localGameWriter.WriteLine(DTOSerializer.Serialize(dto));
+                    return true;
+                }
+                catch (Exception ex) when (ex is IOException || ex is ObjectDisposedException)
+                {
+                    // The receive thread reports the disconnect and reconnects.
+                    _localGameClient?.Close();
+                    Debug.LogError($"Error sending local test message: {ex.Message}");
+                    return false;
+                }
+            }
+        }
+
+        private bool CloseLocalGame()
+        {
+            NeedsConnection[ConnectionType.Game] = false;
+
+            lock (_localGameLock)
+            {
+                _localGameClient?.Close(); // Unblocks the receive thread.
+                _localGameClient = null;
+                _localGameWriter = null;
+            }
+
+            IsConnected[ConnectionType.Game] = false;
+            return true;
+        }
+
+        #endregion Local Test Connection
 
         /// <summary>
         /// Handle closing any server connections that need closing on application closing.

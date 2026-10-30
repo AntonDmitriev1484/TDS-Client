@@ -57,6 +57,14 @@ namespace Assets.Scripts.Utilities
         }
 
         /// <summary>
+        /// Convert a shared Vector3 to a Unity Vector3.
+        /// </summary>
+        public static UnityEngine.Vector3 ToUnityVector(SharedLibrary.Game.Vector3 vector)
+        {
+            return new UnityEngine.Vector3(vector.X, vector.Y, vector.Z);
+        }
+
+        /// <summary>
         /// Get the rotation of a shared Pose as a Unity Quaternion.
         /// </summary>
         public static UnityEngine.Quaternion ToUnityRotation(SharedLibrary.Game.Actions.Pose sharedPose)

@@ -14,6 +14,10 @@ namespace SharedLibrary.Communication.DataTransferObjects
         public double ServerTime;
         public Dictionary<int, long> PlayerLogicalTimestamps = new Dictionary<int, long>();
         public List<CubeState> Cubes = new List<CubeState>();
+        public int Round;
+        public Dictionary<int, int> Scores = new Dictionary<int, int>();
+        public Dictionary<int, GoalCubeState> Goals = new Dictionary<int, GoalCubeState>();
+        public BoardState Board;
 
         /// <summary>
         /// Parameterless constructor for JSON deserialization between server and client.
@@ -27,6 +31,12 @@ namespace SharedLibrary.Communication.DataTransferObjects
 
             foreach (CubeState cube in gameState.Cubes.Values)
                 Cubes.Add(cube.GetDeepCopy());
+
+            Round = gameState.Round;
+            Scores = new Dictionary<int, int>(gameState.Scores);
+            foreach (var kvp in gameState.Goals)
+                Goals.Add(kvp.Key, kvp.Value.GetDeepCopy());
+            Board = gameState.Board?.GetDeepCopy();
         }
     }
 }

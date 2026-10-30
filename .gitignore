@@ -6,3 +6,6 @@
 **/obj
 **/bin
 **/.utmp
+# Copied from UnityClient/runconfig.json only while building (see RunConfigBuildStep).
+UnityClient/Assets/StreamingAssets/runconfig.json
+UnityClient/Assets/StreamingAssets/runconfig.json.meta

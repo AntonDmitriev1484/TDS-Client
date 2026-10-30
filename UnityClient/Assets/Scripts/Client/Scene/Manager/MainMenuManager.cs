@@ -74,6 +74,16 @@ namespace Client.Scene.Manager
                 yield return null;
 
             var connectionManager = ConnectionManager.Instance;
+
+            // Local test: skip the menu. Connecting to the in-app server queues this player, so the
+            // game starts as soon as the server sends its first game state.
+            if (connectionManager.IsLocalTest)
+            {
+                HideMainMenu();
+                _ = connectionManager.ConnectWebSocket(ConnectionType.Game);
+                yield break;
+            }
+
             if (connectionManager.InboundMessagesDict.TryGetValue(typeof(GameStateDTO), out var gameStateEvent))
                 ((UnityEvent<GameStateDTO>)gameStateEvent).AddListener(OnGameStateDTOReceived);
 
@@ -109,7 +119,7 @@ namespace Client.Scene.Manager
         void Update()
         {
             // Keep the button state in sync in case the socket drops after first connecting.
-            if (_playButton != null)
+            if (_playButton != null && !_mainMenuHidden)
             {
                 bool connected = ConnectionManager.Instance != null
                     && ConnectionManager.Instance.IsInitialized

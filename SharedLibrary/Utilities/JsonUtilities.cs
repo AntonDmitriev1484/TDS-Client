@@ -173,6 +173,9 @@ namespace SharedLibrary.Utilities
                     case SingleActionType.MoveCube:
                         action = new MoveCubeAction();
                         break;
+                    case SingleActionType.Score:
+                        action = new ScoreAction();
+                        break;
                     default:
                         throw new JsonSerializationException($"Unsupported SingleActionType '{actionType}'.");
                 }
