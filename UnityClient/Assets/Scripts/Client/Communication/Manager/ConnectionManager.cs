@@ -49,6 +49,8 @@ namespace Client.Communication.Manager
         /// </summary>
         // Web Socket for game connection
         private WebSocket GameWebSocket;
+        // Web Socket for spatial synchronization connection
+        private WebSocket SpatialSyncWebSocket;
         public Dictionary<ConnectionType, float> EstimatedLatencyDict { get; set; }
 
         [SerializeField]
@@ -535,6 +537,10 @@ namespace Client.Communication.Manager
                     this.GameWebSocket = new WebSocket(wsUrl);
                     webSocket = this.GameWebSocket;
                     break;
+                case ConnectionType.SpatialSync:
+                    this.SpatialSyncWebSocket = new WebSocket(wsUrl);
+                    webSocket = this.SpatialSyncWebSocket;
+                    break;
                 default:
                     string methodName = System.Reflection.MethodBase.GetCurrentMethod().Name;
                     Debug.LogError($"Connection type {connectionType.ToString()} is not supported in Connection Manager. See {methodName} method for details.");
@@ -850,6 +856,9 @@ namespace Client.Communication.Manager
             {
                 case ConnectionType.Game:
                     webSocket = this.GameWebSocket;
+                    break;
+                case ConnectionType.SpatialSync:
+                    webSocket = this.SpatialSyncWebSocket;
                     break;
                 default:
                     string methodName = System.Reflection.MethodBase.GetCurrentMethod().Name;

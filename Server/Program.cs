@@ -1,5 +1,7 @@
 using Server.Handler;
 using Server.Manager;
+using Server.Manager.Game;
+using Server.Manager.SpatialSync;
 using Server.Middleware;
 using SharedLibrary.Communication.Connection;
 using System.Net.WebSockets;
@@ -14,16 +16,29 @@ namespace Server
 
             // Register Handlers
             builder.Services.AddScoped<GameConnectionHandler>();
+            builder.Services.AddScoped<SpatialSyncConnectionHandler>();
 
             // Register Managers/Coordinators
             builder.Services.AddSingleton<QueueManager>();
             builder.Services.AddSingleton<GameConnectionManager>();
             builder.Services.AddSingleton<GameCoordinator>();
+            builder.Services.AddSingleton<SpatialSyncConnectionManager>();
+            builder.Services.AddSingleton<SpatialSyncCoordinator>();
 
             // Read the URL from appsettings.json
-            var webServerUrl = builder.Configuration["WebServer:Url"] ?? "https://localhost:5000";
+            string webServerUrl = builder.Configuration["WebServer:Url"] ?? "https://localhost:5000";
             Console.WriteLine($"Web server url: {webServerUrl}");
             builder.WebHost.UseUrls(webServerUrl);
+
+            string debugModeStr = builder.Configuration["WebServer:Debug"] ?? "false";
+            bool debugMode = debugModeStr == "True" || debugModeStr == "true";
+
+            builder.Services.AddSingleton(new ServerSettings
+            {
+                URL = webServerUrl,
+                DebugMode = debugMode
+            });
+
 
             var app = builder.Build();
 

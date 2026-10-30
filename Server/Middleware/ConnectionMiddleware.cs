@@ -1,5 +1,5 @@
 ﻿using Server.Handler;
-using Server.Manager;
+using Server.Manager.Game;
 using SharedLibrary.Communication.Connection;
 using SharedLibrary.Utilities;
 using System.Net.WebSockets;
@@ -29,17 +29,17 @@ namespace Server.Middleware
             if (context.WebSockets.IsWebSocketRequest)
             {
                 // Extract playerID from query string (playerID or playerId) or from X-Player-ID header
-                string playerIdStr = null;
+                string playerIDStr = null;
                 if (context.Request.Query.TryGetValue("playerID", out var qv) || context.Request.Query.TryGetValue("playerId", out qv))
                 {
-                    playerIdStr = qv.ToString();
+                    playerIDStr = qv.ToString();
                 }
                 else if (context.Request.Headers.TryGetValue("X-Player-ID", out var hv))
                 {
-                    playerIdStr = hv.ToString();
+                    playerIDStr = hv.ToString();
                 }
 
-                if (!int.TryParse(playerIdStr, out var playerID) || playerID <= 0)
+                if (!int.TryParse(playerIDStr, out var playerID) || playerID <= 0)
                 {
                     // Missing or invalid player id — reject the websocket upgrade request
                     context.Response.StatusCode = StatusCodes.Status400BadRequest;
@@ -132,9 +132,9 @@ namespace Server.Middleware
             {
                 int playerID = -1;
 
-                if (context.Items.TryGetValue("playerID", out var playerIdObj) && playerIdObj is int)
+                if (context.Items.TryGetValue("playerID", out var playerIDObj) && playerIDObj is int)
                 {
-                    playerID = playerIdObj as int? ?? -1;
+                    playerID = playerIDObj as int? ?? -1;
                 }
                 else
                 {
@@ -143,16 +143,6 @@ namespace Server.Middleware
                 }
 
                 if (webSocket == null) { throw new WebSocketException("The WebSocket object was null."); }
-
-                using (var scope = _scopeFactory.CreateScope())
-                {
-                    var gameConnectionManager = scope.ServiceProvider.GetRequiredService<GameConnectionManager>();
-
-                    if (!gameConnectionManager.AddSocket(webSocket))
-                    {
-                        throw new Exception("The WebSocket could not be added to the Game Connection Manager.");
-                    }
-                }
 
                 var path = context.Request.Path.Value;
 
@@ -186,15 +176,6 @@ namespace Server.Middleware
             {
                 Console.Error.WriteLine("Failed to connect as a WebSocket request.");
                 await context.Response.WriteAsync(ex.ToString());
-            }
-            finally
-            {
-                using (var scope = _scopeFactory.CreateScope())
-                {
-                    var webSocketConnectionManager = scope.ServiceProvider.GetRequiredService<GameConnectionManager>();
-
-                    webSocketConnectionManager.RemoveSocket(webSocket);
-                }
             }
 
         }

@@ -1,5 +1,6 @@
 ﻿using Newtonsoft.Json;
 using Server.Manager;
+using Server.Manager.Game;
 using SharedLibrary.Communication.DataTransferObjects;
 using SharedLibrary.Communication.DataTransferObjects.Game;
 using SharedLibrary.Utilities;
@@ -25,7 +26,7 @@ namespace Server.Handler
         #region Handle Connections
 
         /// <summary>
-        /// Handles an incoming web socket connection from a client for a PVP application connection.
+        /// Handles an incoming web socket connection from a client for a multi-user application connection.
         /// </summary>
         /// <param name="webSocket">The web socket.</param>
         /// <param name="playerID">The player ID.</param>
@@ -40,12 +41,34 @@ namespace Server.Handler
                 using (var scope = _scopeFactory.CreateScope())
                 {
                     var gameConnectionManager = scope.ServiceProvider.GetRequiredService<GameConnectionManager>();
+
+                    if (!gameConnectionManager.AddSocket(webSocket))
+                    {
+                        throw new Exception("The WebSocket could not be added to the Game Connection Manager.");
+                    }
+
                     gameConnectionManager.AddGameSocket(playerID, webSocket);
                 }
 
-                while ((result = await webSocket.ReceiveAsync(new ArraySegment<byte>(buffer), CancellationToken.None)).MessageType != WebSocketMessageType.Close)
+                while (true)
                 {
-                    var message = Encoding.UTF8.GetString(buffer, 0, result.Count);
+                    using var messageStream = new MemoryStream();
+
+                    do
+                    {
+                        result = await webSocket.ReceiveAsync(new ArraySegment<byte>(buffer), CancellationToken.None);
+
+                        if (result.MessageType == WebSocketMessageType.Close)
+                            break;
+
+                        messageStream.Write(buffer, 0, result.Count);
+                    }
+                    while (!result.EndOfMessage);
+
+                    if (result.MessageType == WebSocketMessageType.Close)
+                        break;
+
+                    var message = Encoding.UTF8.GetString(messageStream.ToArray());
 
                     try
                     {
@@ -80,8 +103,17 @@ namespace Server.Handler
                 // Rmove the game socket and dequeue the player from any queues it may be in.
                 using (var scope = _scopeFactory.CreateScope())
                 {
-                    var webSocketConnectionManager = scope.ServiceProvider.GetRequiredService<GameConnectionManager>();
-                    webSocketConnectionManager.RemoveGameSocket(playerID);
+                    var gameConnectionManager = scope.ServiceProvider.GetRequiredService<GameConnectionManager>();
+                    gameConnectionManager.RemoveSocket(webSocket);
+                    gameConnectionManager.RemoveGameSocket(playerID);
+
+                    var gameCoordinator = scope.ServiceProvider.GetRequiredService<GameCoordinator>();
+                    var gameStateManager = gameCoordinator.GetGameByPlayerID(playerID);
+
+                    if (gameStateManager != null)
+                    {
+                        gameStateManager.OnPlayerDisconnected(playerID);
+                    }
 
                     var queuesManager = scope.ServiceProvider.GetRequiredService<QueueManager>();
                     queuesManager.DequeuePlayer(playerID);

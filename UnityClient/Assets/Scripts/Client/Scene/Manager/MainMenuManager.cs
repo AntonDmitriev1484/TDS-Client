@@ -86,7 +86,7 @@ namespace Client.Scene.Manager
                     socketStarted = true;
                     if (t.IsFaulted)
                         MainThreadDispatcher.Enqueue(() =>
-                            Debug.LogError($"{nameof(MainMenuManager)}: ConnectWebSocket faulted — {t.Exception?.GetBaseException().Message}"));
+                            Debug.LogError($"[{nameof(MainMenuManager)}]: ConnectWebSocket faulted — {t.Exception?.GetBaseException().Message}"));
                 });
 
             // Wait until the WebSocket reports as connected (IsConnected is set inside the OnOpen
@@ -189,7 +189,7 @@ namespace Client.Scene.Manager
         {
             if (_mainMenuCanvas == null)
             {
-                Debug.LogWarning($"{nameof(MainMenuManager)}: _mainMenuCanvas is not assigned; skipping placement.");
+                Debug.LogWarning($"[{nameof(MainMenuManager)}]: _mainMenuCanvas is not assigned; skipping placement.");
                 return;
             }
 
@@ -215,7 +215,7 @@ namespace Client.Scene.Manager
             Camera head = Camera.main;
             if (head == null)
             {
-                Debug.LogError($"{nameof(MainMenuManager)}: Camera.main is still null after one frame; cannot place menu canvas.");
+                Debug.LogError($"[{nameof(MainMenuManager)}]: Camera.main is still null after one frame; cannot place menu canvas.");
                 yield break;
             }
 
@@ -227,7 +227,7 @@ namespace Client.Scene.Manager
             Camera head = Camera.main;
             if (head == null)
             {
-                Debug.LogError($"{nameof(MainMenuManager)}: Camera.main is still null after one frame; cannot place menu canvas.");
+                Debug.LogError($"[{nameof(MainMenuManager)}]: Camera.main is still null after one frame; cannot place menu canvas.");
                 yield break;
             }
 
@@ -295,7 +295,7 @@ namespace Client.Scene.Manager
 
             _mainMenuCanvas.transform.SetPositionAndRotation(position, rotation);
 
-            Debug.Log($"{nameof(MainMenuManager)}: menu canvas placed at {position} facing {flatForward}.");
+            Debug.Log($"[{nameof(MainMenuManager)}]: menu canvas placed at {position} facing {flatForward}.");
         }
 
 

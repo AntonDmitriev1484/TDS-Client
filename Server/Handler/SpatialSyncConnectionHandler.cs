@@ -1,7 +1,8 @@
 ﻿using Newtonsoft.Json;
 using Server.Manager;
+using Server.Manager.SpatialSync;
 using SharedLibrary.Communication.DataTransferObjects;
-using SharedLibrary.Communication.DataTransferObjects.Game;
+using SharedLibrary.Communication.DataTransferObjects.SpatialSync;
 using SharedLibrary.Utilities;
 using System.Net.WebSockets;
 using System.Text;
@@ -9,8 +10,8 @@ using System.Text;
 namespace Server.Handler
 {
     /// <summary>
-    /// Handles incoming requests from clients and outgoing requests made by <see cref="ServerGameStateManager"/>.
-    /// Pulls connection information from <see cref="GameConnectionManager"/> to send messages to players.
+    /// Handles incoming requests from clients and outgoing requests made by <see cref="ServerSpatialSyncManager"/>.
+    /// Pulls connection information from <see cref="SpatialSyncCoordinator"/> to send messages to players.
     /// </summary>
     public class SpatialSyncConnectionHandler
     {
@@ -25,7 +26,7 @@ namespace Server.Handler
         #region Handle Connections
 
         /// <summary>
-        /// Handles an incoming web socket connection from a client for a PVP application connection.
+        /// Handles an incoming web socket connection from a client for a multi-user application connection.
         /// </summary>
         /// <param name="webSocket">The web socket.</param>
         /// <param name="playerID">The player ID.</param>
@@ -39,18 +40,52 @@ namespace Server.Handler
             {
                 using (var scope = _scopeFactory.CreateScope())
                 {
-                    var gameConnectionManager = scope.ServiceProvider.GetRequiredService<GameConnectionManager>();
-                    gameConnectionManager.AddGameSocket(playerID, webSocket);
+                    var spatialSyncConnectionManager = scope.ServiceProvider.GetRequiredService<SpatialSyncConnectionManager>();
+
+                    if (!spatialSyncConnectionManager.AddSocket(webSocket))
+                    {
+                        throw new Exception("The WebSocket could not be added to the Game Connection Manager.");
+                    }
+
+                    spatialSyncConnectionManager.AddSpatialSyncSocket(playerID, webSocket);
+
+                    // TODO: Remove this and make spatial sync begin when players have been matched but before game starts.
+                    var spatialSyncCoordinator = scope.ServiceProvider.GetRequiredService<SpatialSyncCoordinator>();
+                    int? firstSpatialSyncInstanceNullable = spatialSyncCoordinator.GetSessionIDOfFirstInstance();
+                    int firstSpatialSyncInstance = firstSpatialSyncInstanceNullable ?? 0;
+
+                    if (firstSpatialSyncInstanceNullable != null)
+                    {
+                        await spatialSyncCoordinator.AddPlayerToSession(playerID, firstSpatialSyncInstance);
+                    }
+                    else
+                    {
+                        await spatialSyncCoordinator.GenerateSpatialSyncSession(new List<int> { playerID });
+                    }
                 }
 
-                while ((result = await webSocket.ReceiveAsync(new ArraySegment<byte>(buffer), CancellationToken.None)).MessageType != WebSocketMessageType.Close)
+                while (true)
                 {
-                    var message = Encoding.UTF8.GetString(buffer, 0, result.Count);
+                    using var messageStream = new MemoryStream();
+
+                    do
+                    {
+                        result = await webSocket.ReceiveAsync(new ArraySegment<byte>(buffer), CancellationToken.None);
+
+                        if (result.MessageType == WebSocketMessageType.Close)
+                            break;
+
+                        messageStream.Write(buffer, 0, result.Count);
+                    }
+                    while (!result.EndOfMessage);
+
+                    if (result.MessageType == WebSocketMessageType.Close)
+                        break;
+
+                    var message = Encoding.UTF8.GetString(messageStream.ToArray());
 
                     try
                     {
-                        Console.WriteLine(message + "\n\n");
-
                         var jsonMessage = JsonUtilities.FromJson<dynamic>(message);
 
                         if (jsonMessage == null)
@@ -77,14 +112,22 @@ namespace Server.Handler
             finally
             {
 
-                // Rmove the game socket and dequeue the player from any queues it may be in.
+                // Rmove the session socket.
                 using (var scope = _scopeFactory.CreateScope())
                 {
-                    var webSocketConnectionManager = scope.ServiceProvider.GetRequiredService<GameConnectionManager>();
-                    webSocketConnectionManager.RemoveGameSocket(playerID);
+                    var spatialSyncConnectionManager = scope.ServiceProvider.GetRequiredService<SpatialSyncConnectionManager>();
+                    spatialSyncConnectionManager.RemoveSocket(webSocket);
+                    spatialSyncConnectionManager.RemoveSessionSocket(playerID);
+
+                    var spatialSyncCoordinator = scope.ServiceProvider.GetRequiredService<SpatialSyncCoordinator>();
+                    var spatialSyncManager = spatialSyncCoordinator.GetSessionByPlayerID(playerID);
+
+                    if (spatialSyncManager != null)
+                    {
+                        spatialSyncManager.OnPlayerDisconnected(playerID);
+                    }
 
                     var queuesManager = scope.ServiceProvider.GetRequiredService<QueueManager>();
-                    queuesManager.DequeuePlayer(playerID);
                 }
 
                 if (webSocket.State == WebSocketState.Open)
@@ -113,42 +156,11 @@ namespace Server.Handler
             try
             {
                 // Handle the message based on its type
-                if (typeString == typeof(QueueDTO).Name)
+                if (typeString == typeof(KeyFrameDTO).Name)
                 {
-                    QueueDTO queueDTO = data.ToObject<QueueDTO>();
+                    KeyFrameDTO keyFrameDTO = data.ToObject<KeyFrameDTO>();
 
-                    if (queueDTO.PlayerID != playerID)
-                    {
-                        await this.SendObjectAsync(webSocket, new ResponseDTO(false, "DTO's player ID does not match the web socket's player ID."));
-                        return;
-                    }
-
-                    await ProcessQueueAsync(webSocket, playerID, queueDTO);
-                }
-                else if (typeString == typeof(DequeueDTO).Name)
-                {
-                    DequeueDTO dequeueDTO = data.ToObject<DequeueDTO>();
-
-                    if (dequeueDTO.PlayerID != playerID)
-                    {
-                        await this.SendObjectAsync(webSocket, new ResponseDTO(false, "DTO's player ID does not match the web socket's player ID."));
-                        return;
-                    }
-
-                    await ProcessDequeueAsync(webSocket, playerID, dequeueDTO);
-                }
-                else if (typeString == typeof(SingleActionDTO).Name)
-                {
-                    SingleActionDTO actionDTO = JsonUtilities.FromJson<SingleActionDTO>(data.ToString());
-
-                    if (actionDTO.Action.PlayerID != playerID)
-                    {
-                        await this.SendObjectAsync(webSocket, new ResponseDTO(false, "DTO's player ID does not match the web socket's player ID."));
-                        return;
-                    }
-
-                    // Process the typed data
-                    await ProcessSingleActionAsync(webSocket, actionDTO);
+                    await ProcessKeyFrameAsync(webSocket, playerID, keyFrameDTO);
                 }
                 else
                 {
@@ -171,96 +183,35 @@ namespace Server.Handler
         /// <param name="webSocket">The web socket that received a single action DTO.</param>
         /// <param name="actionDTO">The single action DTO.</param>
         /// <returns></returns>
-        private async Task ProcessSingleActionAsync(WebSocket webSocket, SingleActionDTO actionDTO)
+        private async Task ProcessKeyFrameAsync(WebSocket webSocket, int playerID, KeyFrameDTO keyFrameDTO)
         {
-            Console.WriteLine($"\nSingle action taken for:\nPlayer ID: {actionDTO.Action.PlayerID}\nSingle Action Type: {actionDTO.Action.SingleActionType}\n");
+            Console.WriteLine($"\nIncoming KeyFrame for:\nPlayer ID: {playerID}\nWidth x Height: {keyFrameDTO.Width}x{keyFrameDTO.Height}\n");
 
-            int playerID = actionDTO.Action.PlayerID;
-
-            ServerGameStateManager? gameManagerNullable;
+            ServerSpatialSyncManager? spatialSyncManagerNullable;
 
             using (var scope = _scopeFactory.CreateScope())
             {
-                var gameCoordinator = scope.ServiceProvider.GetRequiredService<GameCoordinator>();
+                var spatialSyncCoordinator = scope.ServiceProvider.GetRequiredService<SpatialSyncCoordinator>();
 
-                gameManagerNullable = gameCoordinator.GetGameByPlayerID(playerID);
+                spatialSyncManagerNullable = spatialSyncCoordinator.GetSessionByPlayerID(playerID);
             }
 
-            ServerGameStateManager gameManager = gameManagerNullable;
+            ServerSpatialSyncManager spatialSyncManager = spatialSyncManagerNullable;
 
-            if (gameManagerNullable != null && gameManager != null)
+            if (spatialSyncManagerNullable != null && spatialSyncManager != null)
             {
-                // Enqueue the action to be processed by the authoritative game loop.
-                gameManager.EnqueueSingleAction(actionDTO.Action, actionDTO.ClientLogicalTimestamp, playerID);
+                // Enqueue the action to be processed by the spatial synchronization loop.
+                spatialSyncManager.EnqueueKeyFrame(playerID, keyFrameDTO);
 
                 // Acknowledge receipt — actual acceptance and broadcasting will occur when the action is processed in the state sync loop.
                 await this.SendObjectAsync(webSocket, new ResponseDTO(true, "Action queued for processing."));
             }
             else
             {
-                await this.SendObjectAsync(webSocket, new ResponseDTO(false, "Failed to find XR state instance for the player!"));
-                Console.Error.WriteLine("Failed to find XR state instance for the player!");
+                await this.SendObjectAsync(webSocket, new ResponseDTO(false, "Failed to find spatial synchronization session instance for the player!"));
+                Console.Error.WriteLine("Failed to find spatial synchronization session instance for the player!");
                 return;
             }
-        }
-
-        /// <summary>
-        /// Processes an incoming queue DTO. Send a success/error if the queue game DTO is accepted.
-        /// </summary>
-        /// <param name="webSocket">The web socket that received the queue game DTO.</param>
-        /// <param name="playerID">The player's ID.</param>
-        /// <param name="queueDTO">The queue DTO.</param>
-        /// <returns></returns>
-        private async Task ProcessQueueAsync(WebSocket webSocket, int playerID, QueueDTO queueDTO)
-        {
-            bool? successfulAction;
-
-            using (var scope = _scopeFactory.CreateScope())
-            {
-                var queueManager = scope.ServiceProvider.GetRequiredService<QueueManager>();
-
-                // Handle request to enter queue.
-                Console.WriteLine($"\nQueue game for:\nPlayer ID: {playerID}\n");
-                successfulAction = queueManager.EnqueuePlayer(playerID);
-
-            }
-
-            if (successfulAction == null || successfulAction == false)
-            {
-
-                await this.SendObjectAsync(webSocket, new ResponseDTO(false, "Failed to process queue DTO for player."));
-                Console.Error.WriteLine("Failed to process queue DTO for player.");
-                return;
-            }
-
-            await this.SendObjectAsync(webSocket, new ResponseDTO(true, "Successfully processed queue DTO for player."));
-            Console.Error.WriteLine("Successfully processed queue DTO for player.");
-            return;
-        }
-
-        /// <summary>
-        /// Processes an incoming queue DTO. Send a success/error if the queue game DTO is accepted.
-        /// </summary>
-        /// <param name="webSocket">The web socket that received the queue game DTO.</param>
-        /// <param name="playerID">The player's ID.</param>
-        /// <param name="dequeueDTO">The dequeue DTO.</param>
-        /// <returns></returns>
-        private async Task ProcessDequeueAsync(WebSocket webSocket, int playerID, DequeueDTO dequeueDTO)
-        {
-            bool? successfulAction;
-
-            using (var scope = _scopeFactory.CreateScope())
-            {
-                var queueManager = scope.ServiceProvider.GetRequiredService<QueueManager>();
-
-                // Handle request to leave queue.
-                Console.WriteLine($"\nDequeue game for:\nPlayer ID: {playerID}\n");
-                queueManager.DequeuePlayer(playerID);
-            }
-
-            await this.SendObjectAsync(webSocket, new ResponseDTO(true, "Successfully processed queue DTO for player."));
-            Console.Error.WriteLine("Successfully processed queue DTO for player.");
-            return;
         }
 
         #endregion Handle DTOs
@@ -278,8 +229,8 @@ namespace Server.Handler
             WebSocket webSocket;
             using (var scope = _scopeFactory.CreateScope())
             {
-                var gameConnectionManager = scope.ServiceProvider.GetRequiredService<GameConnectionManager>();
-                webSocket = gameConnectionManager.GetGameSocketByPlayerID(playerID);
+                var spatialSyncConnectionManager = scope.ServiceProvider.GetRequiredService<SpatialSyncConnectionManager>();
+                webSocket = spatialSyncConnectionManager.GetSessionSocketByPlayerID(playerID);
             }
 
             if (webSocket == null)

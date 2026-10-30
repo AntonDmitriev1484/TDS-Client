@@ -1,6 +1,6 @@
 ﻿using System.Collections.Concurrent;
 
-namespace Server.Manager
+namespace Server.Manager.Game
 {
     /// <summary>
     /// A coordinator for all games going on. Creates games and holds game instances in a dictionary for easy access.
@@ -11,6 +11,7 @@ namespace Server.Manager
     {
 
         private readonly IServiceScopeFactory _scopeFactory;
+        private readonly ServerSettings _serverSettings;
 
         /// <summary>
         /// A dictionary of the ongoing games by game IDs.
@@ -22,16 +23,17 @@ namespace Server.Manager
         private ConcurrentDictionary<int, int> _gameIDByPlayerID = new ConcurrentDictionary<int, int>();
 
 
-        public GameCoordinator(IServiceScopeFactory scopeFactory)
+        public GameCoordinator(IServiceScopeFactory scopeFactory, ServerSettings serverSettings)
         {
             _scopeFactory = scopeFactory;
+            _serverSettings = serverSettings;
         }
 
         /// <summary>
         /// Generates a new, unique game ID.
         /// </summary>
         /// <returns>The unique game ID.</returns>
-        private int GenerateUniqueGameId()
+        private int GenerateUniqueGameID()
         {
             int newID;
             do
@@ -49,12 +51,12 @@ namespace Server.Manager
         /// <returns></returns>
         public int AddGame(ServerGameStateManager gameStateManager)
         {
-            int newGameID = GenerateUniqueGameId();
+            int newGameID = GenerateUniqueGameID();
 
             // Add to the game instances by game ID.
             while (!_gameInstances.TryAdd(newGameID, gameStateManager))
             {
-                newGameID = GenerateUniqueGameId();
+                newGameID = GenerateUniqueGameID();
             }
 
             // Add to the game instances by player IDs.
@@ -150,7 +152,7 @@ namespace Server.Manager
         {
             try
             {
-                ServerGameStateManager gameStateManager = new ServerGameStateManager(_scopeFactory, playerIDs);
+                ServerGameStateManager gameStateManager = new ServerGameStateManager(_scopeFactory, _serverSettings, playerIDs);
                 this.AddGame(gameStateManager);
                 return;
             }
@@ -176,6 +178,8 @@ namespace Server.Manager
                 Console.WriteLine($"Game with ID: {gameID} not found.");
                 return;
             }
+
+            _gameIDByPlayerID.TryAdd(playerID, gameID);
 
             gameStateManager.AddPlayer(playerID);
 

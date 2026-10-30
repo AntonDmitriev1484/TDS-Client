@@ -12,7 +12,7 @@ using System.Collections.Concurrent;
 /// Inbound messages are handled by <see cref="GameConnectionHandler"/>.
 /// The client must connect to this server over a reliable UDP connection.
 /// </summary>
-namespace Server.Manager
+namespace Server.Manager.Game
 {
     public class ServerGameStateManager
     {
@@ -74,26 +74,6 @@ namespace Server.Manager
             }
         }
 
-        /// <summary>
-        /// Enqueue a single action to the per-object queue. Actions targeting objects should be enqueued
-        /// under the object's ID so they are processed in order per-object during the state sync.
-        /// </summary>
-        /// <param name="action">The action to enqueue.</param>
-        public void EnqueueSingleAction(SingleAction action, long clientLogicalTimestamp, int playerID)
-        {
-            if (action == null) return;
-
-            string key = "global";
-
-            if (action is CubeAction cubeAction)
-            {
-                key = cubeAction.CubeID ?? "global";
-            }
-
-            var queue = _actionQueues.GetOrAdd(key, _ => new ConcurrentQueue<QueuedAction>());
-            queue.Enqueue(new QueuedAction(action, clientLogicalTimestamp, playerID));
-        }
-
         #endregion Properties
 
         #region Constructor/Destructor
@@ -105,10 +85,11 @@ namespace Server.Manager
         /// to prepare the game.</remarks>
         /// <param name="scopeFactory">Factory for creating IServiceScope instances to resolve scoped services.</param>
         /// <param name="playerIDs">Initial list of player IDs used to populate the game's initial state.</param>
-        public ServerGameStateManager(IServiceScopeFactory scopeFactory, List<int> playerIDs)
+        public ServerGameStateManager(IServiceScopeFactory scopeFactory, ServerSettings serverSettings, List<int> playerIDs)
         {
             _scopeFactory = scopeFactory;
-            GameState = new GameState(true);
+            GameState = new GameState(isAuthoritative: true);
+            PlayerLogicalTimestamps = new Dictionary<int, long>();
             InitializeGame(playerIDs);
             // Start the periodic state synchronization loop
             StartStateSync();
@@ -132,8 +113,6 @@ namespace Server.Manager
             for (int i = 0; i < startingPoses.Length; i++)
                 cubes.Add(new CubeState($"cube-{i}", serverStartTime, serverStartTime, startingPoses[i], playerIDs));
 
-            GameState = new GameState(isAuthoritative: true);
-            PlayerLogicalTimestamps = new Dictionary<int, long>();
             foreach (int playerID in playerIDs)
             {
                 PlayerLogicalTimestamps.Add(playerID, 0);
@@ -159,7 +138,12 @@ namespace Server.Manager
 
         #region Players
 
-        public bool IsPlayer(int playerID)
+        /// <summary>
+        /// Check if this game instance has a particular player in it.
+        /// </summary>
+        /// <param name="playerID">The ID of the player to check for.</param>
+        /// <returns>True if the player is part of this game instance, false otherwise.</returns>
+        public bool HasPlayer(int playerID)
         {
             foreach (int id in GameState.PlayerIDs)
             {
@@ -180,7 +164,7 @@ namespace Server.Manager
         {
             if (GameState == null)
                 return;
-            if (IsPlayer(playerID))
+            if (HasPlayer(playerID))
                 return;
             GameState.PlayerIDs.Add(playerID);
             BroadcastGameState();
@@ -217,6 +201,26 @@ namespace Server.Manager
         #endregion Players
 
         #region Process DTOs
+
+        /// <summary>
+        /// Enqueue a single action to the per-object queue. Actions targeting objects should be enqueued
+        /// under the object's ID so they are processed in order per-object during the state sync.
+        /// </summary>
+        /// <param name="action">The action to enqueue.</param>
+        public void EnqueueSingleAction(SingleAction action, long clientLogicalTimestamp, int playerID)
+        {
+            if (action == null) return;
+
+            string key = "global";
+
+            if (action is CubeAction cubeAction)
+            {
+                key = cubeAction.CubeID ?? "global";
+            }
+
+            var queue = _actionQueues.GetOrAdd(key, _ => new ConcurrentQueue<QueuedAction>());
+            queue.Enqueue(new QueuedAction(action, clientLogicalTimestamp, playerID));
+        }
 
         /// <summary>
         /// Start the background loop that updates and broadcasts the game state every TickInterval seconds.

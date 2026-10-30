@@ -1,4 +1,6 @@
-﻿using System.Collections.Concurrent;
+﻿using Server.Manager.Game;
+using Server.Manager.SpatialSync;
+using System.Collections.Concurrent;
 
 namespace Server.Manager
 {
@@ -73,13 +75,14 @@ namespace Server.Manager
             if (playersToMatch.Count > 1)
             {
                 // If a game instance already exists, add all players to that game instance.
-                int? firstInstanceID;
+                int? firstGameInstanceID;
+                int? firstSessionInstanceID;
 
                 using (var scope = _scopeFactory.CreateScope())
                 {
                     var gameCoordinator = scope.ServiceProvider.GetRequiredService<GameCoordinator>();
-                    firstInstanceID = gameCoordinator.GetGameIDOfFirstInstance();
-                    if (firstInstanceID != null)
+                    firstGameInstanceID = gameCoordinator.GetGameIDOfFirstInstance();
+                    if (firstGameInstanceID != null)
                     {
                         // Dequeue each of the players being added.
                         foreach (var playerID in playersToMatch)
@@ -89,14 +92,26 @@ namespace Server.Manager
 
                         foreach (int playerID in playersToMatch)
                         {
-                            Task addPlayerTask = gameCoordinator.AddPlayerToGame(playerID, firstInstanceID.Value);
+                            Task addPlayerTask = gameCoordinator.AddPlayerToGame(playerID, firstGameInstanceID.Value);
+                            tasks.Add(addPlayerTask);
+                        }
+                    }
+
+                    // Also add all players to the spatial synchronization session.
+                    var spatialSyncCoordinator = scope.ServiceProvider.GetRequiredService<SpatialSyncCoordinator>();
+                    firstSessionInstanceID = spatialSyncCoordinator.GetSessionIDOfFirstInstance();
+                    if (firstSessionInstanceID != null)
+                    {
+                        foreach (int playerID in playersToMatch)
+                        {
+                            Task addPlayerTask = spatialSyncCoordinator.AddPlayerToSession(playerID, firstSessionInstanceID.Value);
                             tasks.Add(addPlayerTask);
                         }
                     }
                 }
 
                 // Otherwise, create a new game instance and add all players to it.
-                if (firstInstanceID == null)
+                if (firstGameInstanceID == null)
                 {
                     Task matchPlayersTask = HandleMatchedPlayers(playersToMatch);
                     tasks.Add(matchPlayersTask);
@@ -127,6 +142,11 @@ namespace Server.Manager
             {
                 var gameCoordinator = scope.ServiceProvider.GetRequiredService<GameCoordinator>();
                 await gameCoordinator.GenerateGame(playerIDs);
+
+                /* TODO: Figure out when spatial synchronization should begin.
+                var spatialSyncCoordinator = scope.ServiceProvider.GetRequiredService<SpatialSyncCoordinator>();
+                await spatialSyncCoordinator.GenerateSpatialSyncSession(playerIDs);
+                */
             }
         }
     }

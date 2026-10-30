@@ -16666,6 +16666,7 @@ Transform:
   - {fileID: 1900000003}
   - {fileID: 1727540388}
   - {fileID: 478829715}
+  - {fileID: 1627865297}
   m_Father: {fileID: 0}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
 --- !u!1001 &1342692910
@@ -20267,6 +20268,53 @@ MeshFilter:
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 1618414511}
   m_Mesh: {fileID: 4300088, guid: bd0bb729cb6159b4ab21c5f62cad24ee, type: 3}
+--- !u!1 &1627865296
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 1627865297}
+  - component: {fileID: 1627865298}
+  m_Layer: 0
+  m_Name: SpatialSyncManager
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!4 &1627865297
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1627865296}
+  serializedVersion: 2
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 1341966536}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!114 &1627865298
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1627865296}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 0ad9fb75e1798244fbc4cf6e3d4c7f54, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  _cameraAccess: {fileID: 0}
+  _requestedResolution: {x: 1280, y: 960}
+  _debugSaveKeyFramePng: 0
 --- !u!1 &1629135545
 GameObject:
   m_ObjectHideFlags: 0
@@ -21110,6 +21158,7 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: 
   RetryConnectionDelaySeconds: 1
+  LatencyMeasurementIntervalSeconds: 1
 --- !u!114 &1727540387
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -23205,6 +23254,8 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: 
   _cubeManager: {fileID: 0}
+  _rightHand: {fileID: 0}
+  _leftHand: {fileID: 0}
   _poseSendInterval: 0.05
   _poseSendThreshold: 0.001
 --- !u!1 &1911164458
