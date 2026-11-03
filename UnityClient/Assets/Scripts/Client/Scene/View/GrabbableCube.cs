@@ -103,8 +103,6 @@ public class GrabbableCube : MonoBehaviour
 
         transform.SetPositionAndRotation(_followTarget.TransformPoint(_followLocalPosition),
             _followTarget.rotation * _followLocalRotation);
-
-        Debug.Log($"Cube set to position: {_followTarget.TransformPoint(_followLocalPosition)}");
     }
 
     void ApplyColor()

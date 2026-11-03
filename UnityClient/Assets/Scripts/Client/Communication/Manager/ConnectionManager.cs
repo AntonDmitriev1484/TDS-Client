@@ -71,7 +71,7 @@ namespace Client.Communication.Manager
         // Inbound WebSocket Messages – subscribers receive each message as a typed UnityEvent.
         public Dictionary<Type, UnityEventBase> InboundMessagesDict = new Dictionary<Type, UnityEventBase>();
 
-        // A curated list of types (adjust as per your needs)
+        // A curated list of types (adjust as needed). This is used to initialize InboundMessagesDict with a UnityEvent<T> for each type.
         private List<Type> InboundMessageTypes = new List<Type>
         {
             typeof(QueueDTO),
@@ -80,7 +80,6 @@ namespace Client.Communication.Manager
             typeof(GameStateDTO),
             typeof(ResponseDTO),
             typeof(SyncResponseDTO),
-            typeof(CoordFrameSyncDTO),
         };
 
         #endregion Events

@@ -39,7 +39,7 @@ namespace Client.Scene.Manager
         [Tooltip("How long a pinch on a cube survives while the hand is untracked (seconds).")]
         [SerializeField] float _trackingLossTolerance = 0.5f;
 
-        private GameObject _sharedSceneGameObject;
+        private GameObject _sharedScene;
 
         /// <summary>A hand started pinching on a cube.</summary>
         public event Action<GrabbableCube, OVRHand> PinchStarted;
@@ -74,8 +74,8 @@ namespace Client.Scene.Manager
             if (_hands.Count == 0)
                 Debug.LogError($"{nameof(GrabbableCubeManager)}: no OVRHand found in the scene.");
 
-            _sharedSceneGameObject = GameObject.Find("SharedScene");
-            if (_sharedSceneGameObject == null)
+            _sharedScene = GameObject.Find("SharedScene");
+            if (_sharedScene == null)
                 Debug.LogError($"{nameof(GrabbableCubeManager)}: no GameObject named 'SharedScene' found in the scene.");
         }
 
@@ -91,7 +91,7 @@ namespace Client.Scene.Manager
 
             var go = GameObject.CreatePrimitive(PrimitiveType.Cube);
             go.name = $"GrabbableCube ({id})";
-            go.transform.SetParent(_sharedSceneGameObject.transform, false);
+            go.transform.SetParent(_sharedScene.transform, false);
             go.transform.localPosition = pose.position;
             go.transform.localRotation = pose.rotation;
             go.transform.localScale = Vector3.one * _cubeSize;

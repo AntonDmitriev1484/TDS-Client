@@ -90,7 +90,6 @@ namespace Client.Scene.Manager
 
         #endregion Properties
 
-
         #region Initialization
 
 
@@ -229,33 +228,27 @@ namespace Client.Scene.Manager
 
         #region Handle Incoming Events
 
-        // Called on the WebSocket thread — only enqueue; all Unity API calls happen in Update.
+        /// <summary>
+        /// Replaces the latest game state with the one from the server. This is called on the WebSocket thread, so it only sets a variable; the actual handling happens in Update.
+        /// </summary>
+        /// <param name="dto">The game state DTO from the server.</param>
         void OnGameStateDTOReceived(GameStateDTO dto)
         {
             lock (_gameStateLock)
-                _latestGameStateDTO = dto; // always replace — only latest matters
+                _latestGameStateDTO = dto;
         }
 
         void OnSingleActionDTOReceived(SingleActionDTO dto) => _incomingSingleActions.Enqueue(dto);
 
+        /// <summary>
+        /// This handles incoming messages from the server or other clients, which can be either a <see cref="GameStateDTO"/> or a <see cref="SingleActionDTO"/>.
+        /// </summary>
+        /// <param name="objDTO">The queued DTO.</param>
         void HandleIncomingMessage(object objDTO)
         {
 
             if (objDTO is GameStateDTO gameStateDTO)
             {
-                string cubeStateString = "";
-                foreach (CubeState cubeState in gameStateDTO.Cubes)
-                {
-                    cubeStateString += $"ID: {cubeState.ID}; permissions: ";
-                    foreach (int ID in cubeState.GrabPermissions.Keys)
-                    {
-                        cubeStateString += $"PlayerID {ID} - {cubeState.GrabPermissions[ID]}, ";
-                    }
-                    cubeStateString += "\n";
-                }
-
-                Debug.Log($"Incoming DTO:\n {cubeStateString}");
-
                 _authoritativeGameState.ApplyGameState(_estimatedRoundTripTime, gameStateDTO);
                 AcknowledgeAppliedActions(gameStateDTO.PlayerLogicalTimestamps);
                 ApplyingPredictedState();
@@ -469,8 +462,6 @@ namespace Client.Scene.Manager
             if (cube.FollowTarget != hand.transform)
                 return;
 
-            Debug.Log("Player released cube!");
-
             HandleOurAction(new ReleaseCubeAction(LocalPlayerID, _estimatedServerTime, cube.Id));
         }
 
@@ -489,11 +480,11 @@ namespace Client.Scene.Manager
 
 
                 Transform t = cube.transform;
-                if (Vector3.Distance(t.position, Conversions.ToUnityPosition(state.Pose)) < _poseSendThreshold &&
-                    Quaternion.Angle(t.rotation, Conversions.ToUnityRotation(state.Pose)) < _poseSendThreshold)
+                if (Vector3.Distance(t.localPosition, Conversions.ToUnityPosition(state.Pose)) < _poseSendThreshold &&
+                    Quaternion.Angle(t.localRotation, Conversions.ToUnityRotation(state.Pose)) < _poseSendThreshold)
                     continue;
 
-                HandleOurAction(new MoveCubeAction(LocalPlayerID, _estimatedServerTime, cube.Id, Conversions.ToSharedPose(t.position, t.rotation)));
+                HandleOurAction(new MoveCubeAction(LocalPlayerID, _estimatedServerTime, cube.Id, Conversions.ToSharedPose(t.localPosition, t.localRotation)));
             }
         }
 

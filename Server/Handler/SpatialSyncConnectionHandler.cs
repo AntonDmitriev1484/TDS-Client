@@ -49,19 +49,6 @@ namespace Server.Handler
 
                     spatialSyncConnectionManager.AddSpatialSyncSocket(playerID, webSocket);
 
-                    // TODO: Remove this and make spatial sync begin when players have been matched but before game starts.
-                    var spatialSyncCoordinator = scope.ServiceProvider.GetRequiredService<SpatialSyncCoordinator>();
-                    int? firstSpatialSyncInstanceNullable = spatialSyncCoordinator.GetSessionIDOfFirstInstance();
-                    int firstSpatialSyncInstance = firstSpatialSyncInstanceNullable ?? 0;
-
-                    if (firstSpatialSyncInstanceNullable != null)
-                    {
-                        await spatialSyncCoordinator.AddPlayerToSession(playerID, firstSpatialSyncInstance);
-                    }
-                    else
-                    {
-                        await spatialSyncCoordinator.GenerateSpatialSyncSession(new List<int> { playerID });
-                    }
                 }
 
                 while (true)
@@ -130,12 +117,68 @@ namespace Server.Handler
                     var queuesManager = scope.ServiceProvider.GetRequiredService<QueueManager>();
                 }
 
-                if (webSocket.State == WebSocketState.Open)
+                // Closing writes a frame too, so it takes the same lock as sends.
+                SemaphoreSlim sendLock = WebSocketSendLock.For(webSocket);
+                await sendLock.WaitAsync();
+                try
                 {
-                    await webSocket.CloseAsync(WebSocketCloseStatus.NormalClosure, "Closing", CancellationToken.None);
+                    if (webSocket.State == WebSocketState.Open)
+                    {
+                        await webSocket.CloseAsync(WebSocketCloseStatus.NormalClosure, "Closing", CancellationToken.None);
+                    }
+                }
+                finally
+                {
+                    sendLock.Release();
                 }
                 webSocket.Dispose();
             }
+        }
+
+        /// <summary>
+        /// Forcibly disconnect a player's spatial sync socket, for example because they stopped sending key frames. Sends a close frame
+        /// but does not wait for the client to answer (an unresponsive client never would), then aborts the socket. That ends the
+        /// pending receive in <see cref="HandleWebSocketConnection"/>, whose cleanup then runs as for any other disconnect.
+        /// </summary>
+        /// <param name="playerID">The player to disconnect.</param>
+        /// <param name="reason">Short text sent to the client in the close frame.</param>
+        public async Task DisconnectPlayerAsync(int playerID, string reason)
+        {
+            WebSocket? webSocket;
+            using (var scope = _scopeFactory.CreateScope())
+            {
+                var spatialSyncConnectionManager = scope.ServiceProvider.GetRequiredService<SpatialSyncConnectionManager>();
+                webSocket = spatialSyncConnectionManager.GetSessionSocketByPlayerID(playerID);
+            }
+
+            if (webSocket == null)
+            {
+                return;
+            }
+
+            // Closing writes a frame, so it takes the send lock, but a stuck send must not hold this up forever.
+            SemaphoreSlim sendLock = WebSocketSendLock.For(webSocket);
+            bool locked = false;
+            try
+            {
+                locked = await sendLock.WaitAsync(TimeSpan.FromSeconds(2));
+                if (locked && webSocket.State == WebSocketState.Open)
+                {
+                    using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+                    await webSocket.CloseOutputAsync(WebSocketCloseStatus.PolicyViolation, reason, timeout.Token);
+                }
+            }
+            catch (Exception ex) when (ex is OperationCanceledException || ex is WebSocketException)
+            {
+                // The client is not reachable; abort below anyway.
+            }
+            finally
+            {
+                if (locked)
+                    sendLock.Release();
+            }
+
+            webSocket.Abort();
         }
 
         #endregion Handle Connections
@@ -266,7 +309,24 @@ namespace Server.Handler
 
             var serializedMessage = JsonUtilities.ToJson(message);
             var buffer = Encoding.UTF8.GetBytes(serializedMessage);
-            await webSocket.SendAsync(new ArraySegment<byte>(buffer), WebSocketMessageType.Text, true, CancellationToken.None);
+
+            // A web socket only allows one send at a time. Key frame acknowledgements (from the receive loop) and sync responses
+            // (from the spatial sync loop) can overlap, so sends on the same socket take turns.
+            SemaphoreSlim sendLock = WebSocketSendLock.For(webSocket);
+            await sendLock.WaitAsync();
+            try
+            {
+                if (webSocket.State != WebSocketState.Open)
+                {
+                    return false;
+                }
+
+                await webSocket.SendAsync(new ArraySegment<byte>(buffer), WebSocketMessageType.Text, true, CancellationToken.None);
+            }
+            finally
+            {
+                sendLock.Release();
+            }
 
             return true;
         }

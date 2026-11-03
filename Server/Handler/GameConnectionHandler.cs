@@ -119,9 +119,19 @@ namespace Server.Handler
                     queuesManager.DequeuePlayer(playerID);
                 }
 
-                if (webSocket.State == WebSocketState.Open)
+                // Closing writes a frame too, so it takes the same lock as sends.
+                SemaphoreSlim sendLock = WebSocketSendLock.For(webSocket);
+                await sendLock.WaitAsync();
+                try
                 {
-                    await webSocket.CloseAsync(WebSocketCloseStatus.NormalClosure, "Closing", CancellationToken.None);
+                    if (webSocket.State == WebSocketState.Open)
+                    {
+                        await webSocket.CloseAsync(WebSocketCloseStatus.NormalClosure, "Closing", CancellationToken.None);
+                    }
+                }
+                finally
+                {
+                    sendLock.Release();
                 }
                 webSocket.Dispose();
             }
@@ -347,7 +357,23 @@ namespace Server.Handler
 
             var serializedMessage = JsonUtilities.ToJson(message);
             var buffer = Encoding.UTF8.GetBytes(serializedMessage);
-            await webSocket.SendAsync(new ArraySegment<byte>(buffer), WebSocketMessageType.Text, true, CancellationToken.None);
+
+            // A web socket only allows one send at a time, and sends can come from several threads, so they take turns.
+            SemaphoreSlim sendLock = WebSocketSendLock.For(webSocket);
+            await sendLock.WaitAsync();
+            try
+            {
+                if (webSocket.State != WebSocketState.Open)
+                {
+                    return false;
+                }
+
+                await webSocket.SendAsync(new ArraySegment<byte>(buffer), WebSocketMessageType.Text, true, CancellationToken.None);
+            }
+            finally
+            {
+                sendLock.Release();
+            }
 
             return true;
         }

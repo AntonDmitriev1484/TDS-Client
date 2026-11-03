@@ -1,4 +1,5 @@
-﻿using SharedLibrary.Communication.DataTransferObjects.SpatialSync;
+﻿using Server.Handler;
+using SharedLibrary.Communication.DataTransferObjects.SpatialSync;
 using System.Collections.Concurrent;
 
 namespace Server.Manager.SpatialSync
@@ -11,6 +12,27 @@ namespace Server.Manager.SpatialSync
         public int ID { get; set; }
         public List<int> PlayerIDs { get; set; }
         private ConcurrentDictionary<int, KeyFrameDTO> _latestKeyFrame { get; set; }
+
+        /// <summary>
+        /// How long a player may go without sending a key frame, after they have sent their first one, before they are disconnected.
+        /// Clients send at least once a second, so this only needs to ride out hiccups.
+        /// </summary>
+        public double KeyFrameTimeoutSeconds { get; set; } = 10;
+
+        /// <summary>
+        /// How long a player may stay in the session without sending their first key frame before they are disconnected. This is
+        /// longer because a client first has to get camera permission and start the camera (the client allows up to 70 seconds).
+        /// </summary>
+        public double FirstKeyFrameTimeoutSeconds { get; set; } = 90;
+
+        /// <summary>When each player was last heard from, and whether they have sent a key frame yet.</summary>
+        private sealed class PlayerActivity
+        {
+            public long LastSeenMs = Environment.TickCount64; // starts the clock when the entry is created
+            public volatile bool SentKeyFrame;
+        }
+
+        private readonly ConcurrentDictionary<int, PlayerActivity> _playerActivity = new();
 
         public GlobalMappingManager GlobalMappingManager { get; set; }
 
@@ -53,7 +75,11 @@ namespace Server.Manager.SpatialSync
             _scopeFactory = scopeFactory;
             PlayerIDs = playerIDs;
             _latestKeyFrame = new ConcurrentDictionary<int, KeyFrameDTO>();
-            GlobalMappingManager = new GlobalMappingManager(serverSettings.DebugMode);
+            GlobalMappingManager = new GlobalMappingManager(serverSettings.DebugMode)
+            {
+                // The global map is formed once all of this session's players have been merged into one shared map.
+                ExpectedPlayerIDs = GetPlayerIDsSnapshot,
+            };
 
             StartSpatialSync();
         }
@@ -86,9 +112,19 @@ namespace Server.Manager.SpatialSync
         /// <param name="playerID">The unique identifier of the player to add.</param>
         public void AddPlayer(int playerID)
         {
-            if (HasPlayer(playerID))
-                return;
-            this.PlayerIDs.Add(playerID);
+            lock (PlayerIDs)
+            {
+                if (HasPlayer(playerID))
+                    return;
+                this.PlayerIDs.Add(playerID);
+            }
+        }
+
+        /// <summary>A copy of the session's player IDs that is safe to read while players join and leave.</summary>
+        private IReadOnlyCollection<int> GetPlayerIDsSnapshot()
+        {
+            lock (PlayerIDs)
+                return PlayerIDs.ToArray();
         }
 
         /// <summary>
@@ -104,7 +140,8 @@ namespace Server.Manager.SpatialSync
         /// </summary>
         public void OnPlayerDisconnected(int playerID)
         {
-            this.PlayerIDs.Remove(playerID);
+            lock (PlayerIDs)
+                this.PlayerIDs.Remove(playerID);
         }
 
         #endregion Players
@@ -113,6 +150,11 @@ namespace Server.Manager.SpatialSync
 
         public void EnqueueKeyFrame(int playerID, KeyFrameDTO keyFrameDTO)
         {
+            // Any key frame counts as a sign of life for the timeout.
+            PlayerActivity activity = _playerActivity.GetOrAdd(playerID, _ => new PlayerActivity());
+            Interlocked.Exchange(ref activity.LastSeenMs, Environment.TickCount64);
+            activity.SentKeyFrame = true;
+
             if (_latestKeyFrame.ContainsKey(playerID))
             {
                 _latestKeyFrame[playerID] = keyFrameDTO;
@@ -152,10 +194,25 @@ namespace Server.Manager.SpatialSync
                             int playerID = pair.Key;
                             KeyFrameDTO keyFrameDTO = pair.Value;
 
-                            // Add to global map and obtain spatial synchronization data to return to client.
-                            GlobalMappingManager.HandleNewKeyFrame(playerID, keyFrameDTO);
+                            try
+                            {
+                                // Add to global map; this returns the key frame's global pose once the global map is formed.
+                                SharedLibrary.Game.Actions.Pose? globalPose = GlobalMappingManager.HandleNewKeyFrame(playerID, keyFrameDTO);
+
+                                // Tell the player: with the global pose if the global map is ready for them, without it if not.
+                                SyncResponseDTO syncResponseDTO = globalPose.HasValue
+                                    ? new SyncResponseDTO(keyFrameDTO.ID, keyFrameDTO.CameraLocalPose, globalPose.Value)
+                                    : new SyncResponseDTO(keyFrameDTO.ID, keyFrameDTO.CameraLocalPose);
+                                _ = AddOutgoingDTO(playerID, syncResponseDTO);
+                            }
+                            catch (Exception ex)
+                            {
+                                Console.Error.WriteLine($"Failed to process key frame {keyFrameDTO.ID} of player {playerID}: {ex}");
+                            }
                         }
                     }
+
+                    DisconnectSilentPlayers();
 
                     try
                     {
@@ -194,6 +251,102 @@ namespace Server.Manager.SpatialSync
         }
 
         #endregion Process DTOs
+
+        #region Player Timeouts
+
+        /// <summary>
+        /// Disconnect players that have gone quiet. A player who is in the session but sends no key frames can never be merged into the
+        /// global map, and the global map waits for every player in the session, so one silent player would hold everybody back.
+        /// Never throws, so the spatial synchronization loop keeps running.
+        /// </summary>
+        private void DisconnectSilentPlayers()
+        {
+            try
+            {
+                long now = Environment.TickCount64;
+                IReadOnlyCollection<int> playerIDs = GetPlayerIDsSnapshot();
+
+                foreach (int playerID in playerIDs)
+                {
+                    // A player is first seen here when they join, which is when their clock starts.
+                    PlayerActivity activity = _playerActivity.GetOrAdd(playerID, _ => new PlayerActivity());
+
+                    double silentSeconds = (now - Interlocked.Read(ref activity.LastSeenMs)) / 1000.0;
+                    double limitSeconds = activity.SentKeyFrame ? KeyFrameTimeoutSeconds : FirstKeyFrameTimeoutSeconds;
+
+                    if (silentSeconds > limitSeconds)
+                    {
+                        string reason = activity.SentKeyFrame
+                            ? $"no key frame for {silentSeconds:0.#} s"
+                            : $"no first key frame after {silentSeconds:0.#} s";
+                        DisconnectPlayer(playerID, reason);
+                    }
+                }
+
+                // Forget players that have left the session.
+                foreach (int playerID in _playerActivity.Keys)
+                {
+                    if (!playerIDs.Contains(playerID))
+                        _playerActivity.TryRemove(playerID, out _);
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine($"Failed to check for silent players: {ex}");
+            }
+        }
+
+        /// <summary>
+        /// Take a player out of the session right away (so the global map no longer waits for them), then close their socket.
+        /// </summary>
+        private void DisconnectPlayer(int playerID, string reason)
+        {
+            Console.WriteLine($"[SpatialSync] Disconnecting player {playerID}: {reason}.");
+
+            _playerActivity.TryRemove(playerID, out _);
+            _latestKeyFrame.TryRemove(playerID, out _);
+            OnPlayerDisconnected(playerID);
+
+            _ = CloseSocketAsync(playerID, reason);
+        }
+
+        private async Task CloseSocketAsync(int playerID, string reason)
+        {
+            try
+            {
+                using var scope = _scopeFactory.CreateScope();
+                var handler = scope.ServiceProvider.GetRequiredService<SpatialSyncConnectionHandler>();
+                await handler.DisconnectPlayerAsync(playerID, reason);
+            }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine($"Failed to close the socket of player {playerID}: {ex}");
+            }
+        }
+
+        #endregion Player Timeouts
+
+        #region Send Messages
+
+        /// <summary>
+        /// Send a message to a player without waiting for it. Never throws: a failed send is logged here, since nobody awaits the result.
+        /// </summary>
+        public async Task AddOutgoingDTO(int playerID, object obj)
+        {
+            try
+            {
+                using var scope = _scopeFactory.CreateScope();
+                var sessionConnectionHandler = scope.ServiceProvider.GetRequiredService<SpatialSyncConnectionHandler>();
+                if (!await sessionConnectionHandler.SendObjectAsync(playerID, obj))
+                    Console.Error.WriteLine($"Could not send {obj.GetType().Name} to player {playerID}.");
+            }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine($"Failed to send {obj.GetType().Name} to player {playerID}: {ex}");
+            }
+        }
+
+        #endregion Send Messages
 
     }
 }

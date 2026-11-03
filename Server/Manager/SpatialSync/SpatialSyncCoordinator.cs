@@ -87,9 +87,10 @@ namespace Server.Manager.SpatialSync
 
             if (successfulRemoval && spatialSyncManager != null)
             {
-                foreach (int playerID in spatialSyncManager.PlayerIDs.ToList())
+                // Every player that points at this session, including ones that dropped out of its player list.
+                foreach (var entry in _sessionIDByPlayerID.Where(entry => entry.Value == sessionID).ToList())
                 {
-                    _sessionIDByPlayerID.TryRemove(playerID, out _);
+                    _sessionIDByPlayerID.TryRemove(entry.Key, out _);
                 }
             }
             else
@@ -149,17 +150,18 @@ namespace Server.Manager.SpatialSync
         /// </summary>
         /// <param name="playerIDs">The list of player IDs for the players to generate the session for.</param>
         /// <returns>The manager for the generated session instance.</returns>
-        public async Task GenerateSpatialSyncSession(List<int> playerIDs)
+        public async Task<int> GenerateSpatialSyncSession(List<int> playerIDs)
         {
             try
             {
                 ServerSpatialSyncManager spatialSyncManager = new ServerSpatialSyncManager(_scopeFactory, _serverSettings, playerIDs);
                 this.AddSession(spatialSyncManager);
-                return;
+                return spatialSyncManager.ID;
             }
             catch (Exception ex)
             {
                 Console.WriteLine($"Error in generating session: {ex.Message}");
+                return -1;
             }
         }
 

@@ -10744,6 +10744,37 @@ MeshFilter:
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 832297240}
   m_Mesh: {fileID: 4300024, guid: bd0bb729cb6159b4ab21c5f62cad24ee, type: 3}
+--- !u!1 &855353243
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 855353244}
+  m_Layer: 0
+  m_Name: SharedScene
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!4 &855353244
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 855353243}
+  serializedVersion: 2
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 2134282311}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
 --- !u!1 &858967644
 GameObject:
   m_ObjectHideFlags: 0
@@ -20312,8 +20343,12 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 0ad9fb75e1798244fbc4cf6e3d4c7f54, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
+  SendRate: 5
+  SyncedSendRate: 1
   _cameraAccess: {fileID: 0}
   _requestedResolution: {x: 1280, y: 960}
+  _imageFormat: 0
+  _jpegQuality: 90
   _debugSaveKeyFramePng: 0
 --- !u!1 &1629135545
 GameObject:
@@ -26336,6 +26371,7 @@ Transform:
   - {fileID: 891580982}
   - {fileID: 1337028376}
   - {fileID: 987429868}
+  - {fileID: 855353244}
   m_Father: {fileID: 0}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
 --- !u!1 &2139489426

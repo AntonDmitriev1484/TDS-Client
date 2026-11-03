@@ -5,11 +5,11 @@ using SharedLibrary.Communication.Connection;
 using SharedLibrary.Communication.DataTransferObjects.SpatialSync;
 using System;
 using System.Collections;
-using System.Collections.Generic;
 using System.IO;
 using System.Threading.Tasks;
 using Unity.Collections;
 using UnityEngine;
+using UnityEngine.Events;
 using UnityEngine.Experimental.Rendering;
 #if UNITY_ANDROID && !UNITY_EDITOR
 using UnityEngine.Android;
@@ -25,15 +25,17 @@ namespace Client.Scene.Manager
         public static SpatialSyncManager Instance { get; set; } // Singleton Instance
         public bool IsInitialized { get; set; }
 
-        /// <summary>World-space camera pose of every key frame extracted so far, by key frame ID.</summary>
-        public Dictionary<long, Pose> KeyFramePose { get; private set; }
 
         /// <summary>True once the passthrough camera is delivering images.</summary>
         public bool IsCameraReady => _cameraAccess != null && _cameraAccess.IsPlaying;
 
         private long _keyFrameID = 0;
+        [Tooltip("Key frames per second while the global map is not ready for this device yet, so it is joined as soon as possible.")]
         public float SendRate = 5.0f;
-        private float _tickInterval => 1.0f / SendRate;
+        [Tooltip("Key frames per second once the server has given this device a global pose; it only needs to keep the alignment fresh.")]
+        public float SyncedSendRate = 1.0f;
+        private bool _isGloballyAligned = false; // True while the latest response from the server carried a global pose
+        private float _tickInterval => 1.0f / (_isGloballyAligned ? SyncedSendRate : SendRate);
         private Task<bool> _pendingSend; // Key frame currently being serialized/sent, if any
 
         private const string HeadsetCameraPermission = "horizonos.permission.HEADSET_CAMERA";
@@ -55,6 +57,11 @@ namespace Client.Scene.Manager
         [Header("Debug")]
         [Tooltip("Write every extracted key frame's compressed image to Application.persistentDataPath, to check image orientation.")]
         [SerializeField] private bool _debugSaveKeyFramePng = false;
+
+        private SyncResponseDTO _latestSyncResponseDTO = null;
+        readonly object _syncResponseLock = new object();
+
+        private GameObject _sharedScene;
 
         #endregion Properties
 
@@ -96,9 +103,6 @@ namespace Client.Scene.Manager
             // Passed wait checks on other needed objects, can now initialize server
             // Use a coroutine to wait for the async operation to complete
             yield return StartCoroutine(InitializeSpatialSyncCoroutine());
-
-            // Now, start loop to send keyframes to get shared info.
-            StartCoroutine(SendKeyFrameLoop());
         }
 
         /// <summary>
@@ -107,31 +111,15 @@ namespace Client.Scene.Manager
         /// <returns></returns>
         private IEnumerator InitializeSpatialSyncCoroutine()
         {
-            KeyFramePose = new Dictionary<long, Pose>();
 
-            bool socketStarted = false;
-            ConnectionManager.Instance.ConnectWebSocket(ConnectionType.SpatialSync)
-                .ContinueWith(t =>
-                {
-                    socketStarted = true;
-                    if (t.IsFaulted)
-                        MainThreadDispatcher.Enqueue(() =>
-                            Debug.LogError($"[{nameof(SpatialSyncManager)}]: ConnectWebSocket faulted — {t.Exception?.GetBaseException().Message}"));
-                });
+            _sharedScene = GameObject.Find("SharedScene");
+            if (_sharedScene == null)
+                Debug.LogError($"{nameof(SpatialSyncManager)}: no GameObject named 'SharedScene' found in the scene.");
 
-            // Wait until the WebSocket reports as connected (IsConnected is set inside the OnOpen
-            // handler on the network thread, so it's safe to poll from the main thread).
-            while (!ConnectionManager.Instance.IsConnected[ConnectionType.SpatialSync])
-            {
-                // Bail out if the task itself threw without ever setting IsConnected.
-                if (socketStarted && !ConnectionManager.Instance.IsConnected[ConnectionType.SpatialSync]
-                    && !ConnectionManager.Instance.NeedsConnection[ConnectionType.SpatialSync])
-                {
-                    Debug.LogError($"Connection failed to {ConnectionManager.Instance._serverUrl}. Trying again...");
-                    yield break;
-                }
-                yield return null;
-            }
+            if (ConnectionManager.Instance.InboundMessagesDict.TryGetValue(typeof(SyncResponseDTO), out var srEvent))
+                ((UnityEvent<SyncResponseDTO>)srEvent).AddListener(OnSyncResponseDTOReceived);
+            if (ConnectionManager.Instance.InboundMessagesDict.TryGetValue(typeof(BeginSpatialSyncDTO), out var bssEvent))
+                ((UnityEvent<BeginSpatialSyncDTO>)bssEvent).AddListener(OnBeginSpatialSyncDTOReceived);
 
             yield return StartCoroutine(InitializeCameraCoroutine());
 
@@ -205,6 +193,24 @@ namespace Client.Scene.Manager
 
         #region Update Loop
 
+        private void Update()
+        {
+            // Handle the latest sync response DTO from the server, if any.
+            SyncResponseDTO syncResponseDTO = null;
+            lock (_syncResponseLock)
+            {
+                if (_latestSyncResponseDTO != null)
+                {
+                    syncResponseDTO = _latestSyncResponseDTO;
+                    _latestSyncResponseDTO = null;
+                }
+            }
+            if (syncResponseDTO != null)
+            {
+                HandleIncomingMessage(syncResponseDTO);
+            }
+        }
+
         /// <summary>
         /// Every <see cref="_tickInterval"/> seconds, extract a key frame and send it to the server.
         /// </summary>
@@ -223,6 +229,9 @@ namespace Client.Scene.Manager
                     {
                         nextSendTime = Time.realtimeSinceStartup + _tickInterval;
                     }
+
+                    // If the rate just went up (the alignment was lost), don't wait out a deadline set at the slow rate.
+                    nextSendTime = Mathf.Min(nextSendTime, Time.realtimeSinceStartup + _tickInterval);
 
                     TrySendKeyFrame();
                 }
@@ -327,8 +336,6 @@ namespace Client.Scene.Manager
                 ImageData = imageData,
             };
 
-            KeyFramePose[keyFrame.ID] = cameraPose;
-
             if (_debugSaveKeyFramePng)
             {
                 DebugSaveImage(keyFrame);
@@ -380,6 +387,110 @@ namespace Client.Scene.Manager
         }
 
         #endregion Key Frame Methods
+
+        #region Handle Incoming Events
+
+        /// <summary>
+        /// This is called on the WebSocket thread when a SyncResponseDTO arrives from the server. It only sets a variable; the actual handling happens in Update.
+        /// </summary>
+        /// <param name="dto">The sync response DTO from the server.</param>
+        void OnSyncResponseDTOReceived(SyncResponseDTO dto)
+        {
+            lock (_syncResponseLock)
+            {
+                _latestSyncResponseDTO = dto;
+            }
+        }
+
+        /// <summary>
+        /// Handles the BeginSpatialSyncDTO from the server, which indicates that the server is ready to start spatial synchronization (i.e., the client can start sending key frames to get the global pose).
+        /// </summary>
+        /// <param name="dto">The begin spatial sync DTO from the server.</param>
+        void OnBeginSpatialSyncDTOReceived(BeginSpatialSyncDTO dto)
+        {
+            StartCoroutine(BeginSpatialSync());
+        }
+
+        IEnumerator BeginSpatialSync()
+        {
+            bool socketStarted = false;
+            ConnectionManager.Instance.ConnectWebSocket(ConnectionType.SpatialSync)
+                .ContinueWith(t =>
+                {
+                    socketStarted = true;
+                    if (t.IsFaulted)
+                        MainThreadDispatcher.Enqueue(() =>
+                            Debug.LogError($"[{nameof(SpatialSyncManager)}]: ConnectWebSocket faulted — {t.Exception?.GetBaseException().Message}"));
+                });
+
+            // Wait until the WebSocket reports as connected (IsConnected is set inside the OnOpen
+            // handler on the network thread, so it's safe to poll from the main thread).
+            while (!ConnectionManager.Instance.IsConnected[ConnectionType.SpatialSync])
+            {
+                // Bail out if the task itself threw without ever setting IsConnected.
+                if (socketStarted && !ConnectionManager.Instance.IsConnected[ConnectionType.SpatialSync]
+                    && !ConnectionManager.Instance.NeedsConnection[ConnectionType.SpatialSync])
+                {
+                    Debug.LogError($"Connection failed to {ConnectionManager.Instance._serverUrl}. Trying again...");
+                    yield break;
+                }
+                yield return null;
+            }
+
+            // Start loop to send keyframes to get spatial synchronization info.
+            StartCoroutine(SendKeyFrameLoop());
+        }
+
+        /// <summary>
+        /// This handles incoming spatial synchronization messages from the server.
+        /// </summary>
+        /// <param name="objDTO">The queued DTO.</param>
+        void HandleIncomingMessage(object objDTO)
+        {
+            if (objDTO is SyncResponseDTO syncResponseDTO)
+            {
+                HandleSyncResponse(syncResponseDTO);
+            }
+            else
+            {
+                Debug.LogError($"{nameof(SpatialSyncManager)}: incoming message of type {objDTO.GetType().Name} was never handled!");
+            }
+        }
+
+        /// <summary>
+        /// Handle a response to a key frame. Without a global pose the global map is not ready for this device yet, so keep
+        /// sending at the fast rate. With one, move the shared scene so the global frame lines up with this headset's tracking space.
+        /// </summary>
+        private void HandleSyncResponse(SyncResponseDTO response)
+        {
+            // Follows the latest response, so if the alignment is ever lost the send rate goes back up by itself.
+            _isGloballyAligned = response.HasGlobalPose;
+            if (!response.HasGlobalPose)
+            {
+                return;
+            }
+
+            if (_sharedScene == null)
+            {
+                Debug.LogError($"[{nameof(SpatialSyncManager)}] Received a global pose but there is no SharedScene to align.");
+                return;
+            }
+
+            // L: where this headset's camera was in its own tracking space when the key frame was taken.
+            // G: where the server says that same camera was in the global frame.
+            Pose localPose = Conversions.ToUnityPose(response.CameraLocalPose);
+            Pose globalPose = Conversions.ToUnityPose(response.GlobalPose.Value);
+
+            // The shared scene's content is authored in global coordinates, so the scene's transform must map global -> this headset's
+            // world: world = rotation * global + position. Requiring that G maps to L gives:
+            Quaternion rotation = localPose.rotation * Quaternion.Inverse(globalPose.rotation);
+            Vector3 position = localPose.position - rotation * globalPose.position;
+
+            _sharedScene.transform.SetPositionAndRotation(position, rotation);
+        }
+
+        #endregion Handle Incoming Events
+
 
     }
 }

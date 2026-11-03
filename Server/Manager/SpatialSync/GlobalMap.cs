@@ -108,6 +108,14 @@ namespace Server.Manager.SpatialSync
         public ORBExtractorParameters ExtractorParameters { get; init; } = new() { MaxDegreeOfParallelism = Math.Min(4, Environment.ProcessorCount) };
         public ORBMatchParameters MatchParameters { get; init; } = ORBMatchParameters.Default;
 
+        // ----- The global map -----
+
+        /// <summary>
+        /// The global map counts as formed once every player of the session is in one shared sub-map, but only if there are at
+        /// least this many players. Use 1 to let a single player form the global map alone (for testing).
+        /// </summary>
+        public int MinPlayersForGlobalMap { get; init; } = 2;
+
         // ----- Merging sub-maps -----
 
         /// <summary>Descriptor-matched map point pairs between two sub-maps that must agree on one transform for them to be merged.</summary>

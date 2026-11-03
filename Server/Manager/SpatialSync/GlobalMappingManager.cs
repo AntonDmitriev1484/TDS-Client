@@ -2,6 +2,7 @@
 using SharedLibrary.Communication.DataTransferObjects.SpatialSync;
 using System.Diagnostics;
 using System.Numerics;
+using SharedPose = SharedLibrary.Game.Actions.Pose;
 
 namespace Server.Manager.SpatialSync
 {
@@ -23,6 +24,9 @@ namespace Server.Manager.SpatialSync
         private readonly Dictionary<int, SubMap> _subMaps = new();       // sub-map ID -> sub-map
         private readonly Dictionary<int, int> _subMapIDByPlayer = new(); // player ID -> sub-map ID
         private readonly Dictionary<int, RigidTransform> _playerToMap = new(); // player ID -> device tracking space to map frame
+        private int _globalSubMapID = -1; // the sub-map that formed the global map (-1 until it exists)
+        private readonly Dictionary<int, Vector3> _lastKnownPositionInMap = new(); // player ID -> last reported position, in the frame of the player's sub-map
+        private Vector3 _globalOrigin; // the point of the global sub-map's frame that is (0, 0, 0) in the global frame
         private int _nextKeyFrameID = 1;
         private int _nextMapPointID = 1;
         private int _nextSubMapID = 1;
@@ -31,6 +35,25 @@ namespace Server.Manager.SpatialSync
         #region Properties
 
         public bool DebugMode { get; set; }
+
+        /// <summary>
+        /// True from the moment the global map was first formed: every player of the session had been merged into one shared
+        /// map. It stays true afterwards (players who join later wait until their own map has merged into the global map).
+        /// </summary>
+        public bool IsGlobalMapFormed { get; private set; }
+
+        /// <summary>
+        /// The point of the global sub-map's frame that is (0, 0, 0) of the global frame. Set once, when the global map is first
+        /// formed, to the average of the last known positions of the players in it. The global frame has the same axes as the
+        /// global sub-map's frame; it is only moved by this translation. Zero until the global map is formed.
+        /// </summary>
+        public Vector3 GlobalOrigin { get { lock (_mapLock) return _globalOrigin; } }
+
+        /// <summary>
+        /// Returns the players the session expects to be in the global map. If not set, the players that have sent key frames so
+        /// far are used.
+        /// </summary>
+        public Func<IReadOnlyCollection<int>>? ExpectedPlayerIDs { get; set; }
 
         public int KeyFrameCount { get { lock (_mapLock) return _subMaps.Values.Sum(s => s.KeyFrames.Count); } }
         public int MapPointCount { get { lock (_mapLock) return _subMaps.Values.Sum(s => s.Points.Count); } }
@@ -54,7 +77,12 @@ namespace Server.Manager.SpatialSync
 
         #region Methods
 
-        public void HandleNewKeyFrame(int playerID, KeyFrameDTO keyFrameDTO)
+        /// <summary>
+        /// Add a key frame to the map. Returns the camera pose of the key frame in the global frame once the global map has been
+        /// formed and this player's map is part of it. Returns null while that is not the case, and the caller then tells the
+        /// player the global map is not ready yet.
+        /// </summary>
+        public SharedPose? HandleNewKeyFrame(int playerID, KeyFrameDTO keyFrameDTO)
         {
             if (DebugMode)
             {
@@ -67,7 +95,9 @@ namespace Server.Manager.SpatialSync
             if (keyFrameDTO.ImageData is null || !KeyFrameImageDecoder.TryDecodeGrayscale(keyFrameDTO.ImageData, out byte[] gray, out int width, out int height))
             {
                 Console.WriteLine($"[GlobalMap] Player {playerID}: key frame {keyFrameDTO.ID} has no decodable image; skipped.");
-                return;
+                lock (_mapLock)
+                    RecordLastKnownPosition(playerID, keyFrameDTO.CameraLocalPose);
+                return ResolveGlobalPose(playerID, keyFrameDTO.CameraLocalPose);
             }
 
             ORBFeatureSet features = ORBUtilities.ExtractFeatures(gray, width, height, _parameters.ExtractorParameters);
@@ -78,9 +108,16 @@ namespace Server.Manager.SpatialSync
             lock (_mapLock)
             {
                 result = InsertKeyFrame(playerID, keyFrameDTO, features);
+
+                // After the insert, so a merge this key frame triggered has already updated the player's transform.
+                RecordLastKnownPosition(playerID, keyFrameDTO.CameraLocalPose);
+
                 if (result.Inserted && DebugMode)
                     snapshot = CreateSnapshotLocked();
             }
+
+            // Done after the key frame was merged in, so the key frame that completes the global map already gets its global pose.
+            SharedPose? globalPose = ResolveGlobalPose(playerID, keyFrameDTO.CameraLocalPose);
 
             Console.WriteLine($"[GlobalMap] Player {playerID} key frame {keyFrameDTO.ID}: {(result.Inserted ? "inserted" : "skipped (" + result.Reason + ")")}, " +
                               $"{result.Features} features (extract {extractMs} ms), +{result.NewMapPoints} new / {result.TrackedMapPoints} tracked points, " +
@@ -93,6 +130,8 @@ namespace Server.Manager.SpatialSync
             {
                 _debugImageDisplayService!.ShowMap(snapshot);
             }
+
+            return globalPose;
         }
 
         /// <summary>
@@ -160,6 +199,119 @@ namespace Server.Manager.SpatialSync
         }
 
         #endregion Methods
+
+        #region Player Positions
+
+        /// <summary>
+        /// Remember where the player's device was at its latest key frame, in the frame of the player's sub-map. Used to place the
+        /// origin of the global frame. Needs the player to have a sub-map (otherwise there is no frame to express the position in).
+        /// Must be called with the map lock held.
+        /// </summary>
+        private void RecordLastKnownPosition(int playerID, SharedPose localPose)
+        {
+            if (!_subMapIDByPlayer.ContainsKey(playerID) || !_playerToMap.TryGetValue(playerID, out RigidTransform deviceToMap))
+                return;
+
+            var position = deviceToMap.Apply(new Vector3(localPose.Position.X, localPose.Position.Y, localPose.Position.Z));
+            if (float.IsNaN(position.X) || float.IsNaN(position.Y) || float.IsNaN(position.Z))
+                return;
+
+            _lastKnownPositionInMap[playerID] = position;
+        }
+
+        /// <summary>
+        /// The last known position of a player, in the frame of the sub-map the player is in right now (this changes when the
+        /// sub-map is merged into another one; the position is moved along with it). False if the player has no sub-map yet.
+        /// </summary>
+        public bool TryGetLastKnownPosition(int playerID, out Vector3 position, out int subMapID)
+        {
+            lock (_mapLock)
+            {
+                position = default;
+                return _subMapIDByPlayer.TryGetValue(playerID, out subMapID)
+                    && _lastKnownPositionInMap.TryGetValue(playerID, out position);
+            }
+        }
+
+        #endregion Player Positions
+
+        #region Global Map State
+
+        /// <summary>
+        /// Checks whether the global map has just been formed, then returns the given local camera pose of a player in the global
+        /// frame (null if the global map is not formed or the player's map is not part of it yet).
+        /// </summary>
+        private SharedPose? ResolveGlobalPose(int playerID, SharedPose localPose)
+        {
+            lock (_mapLock)
+            {
+                UpdateGlobalMapState();
+
+                if (!IsGlobalMapFormed
+                    || !_subMapIDByPlayer.TryGetValue(playerID, out int subMapID)
+                    || subMapID != _globalSubMapID
+                    || !_playerToMap.TryGetValue(playerID, out RigidTransform deviceToMap))
+                {
+                    return null;
+                }
+
+                // The pose the headset reported is in its own tracking space; the player's device-to-map transform moves it into the
+                // global sub-map's frame, and the global origin then moves that frame's (0, 0, 0) to where the global frame has it.
+                Vector3 position = deviceToMap.Apply(new Vector3(localPose.Position.X, localPose.Position.Y, localPose.Position.Z)) - _globalOrigin;
+                Quaternion rotation = deviceToMap.Apply(new Quaternion(localPose.Rotation.X, localPose.Rotation.Y, localPose.Rotation.Z, localPose.Rotation.W));
+
+                return new SharedPose(
+                    new SharedLibrary.Game.Vector3(position.X, position.Y, position.Z),
+                    new SharedLibrary.Game.Quaternion(rotation.X, rotation.Y, rotation.Z, rotation.W));
+            }
+        }
+
+        /// <summary>
+        /// The global map is formed the first time every expected player has sent key frames and all of them are in the same sub-map
+        /// (and there are at least <see cref="GlobalMappingParameters.MinPlayersForGlobalMap"/> of them). Once formed it stays formed.
+        /// Must be called with the map lock held.
+        /// </summary>
+        private void UpdateGlobalMapState()
+        {
+            if (IsGlobalMapFormed)
+                return;
+
+            IReadOnlyCollection<int> expected = ExpectedPlayerIDs?.Invoke() ?? _subMapIDByPlayer.Keys.ToArray();
+            if (expected.Count < _parameters.MinPlayersForGlobalMap)
+                return;
+
+            int subMapID = -1;
+            foreach (int playerID in expected)
+            {
+                // A player who has not sent a key frame yet has no map, so the global map cannot be complete.
+                if (!_subMapIDByPlayer.TryGetValue(playerID, out int playerSubMapID))
+                    return;
+                if (subMapID == -1)
+                    subMapID = playerSubMapID;
+                else if (subMapID != playerSubMapID)
+                    return;
+            }
+
+            // The global frame is the global sub-map's frame with its (0, 0, 0) moved to the average of where the players are right now.
+            Vector3 sum = Vector3.Zero;
+            int counted = 0;
+            foreach (int playerID in expected)
+            {
+                if (_lastKnownPositionInMap.TryGetValue(playerID, out Vector3 playerPosition))
+                {
+                    sum += playerPosition;
+                    counted++;
+                }
+            }
+            _globalOrigin = counted > 0 ? sum / counted : Vector3.Zero;
+
+            _globalSubMapID = subMapID;
+            IsGlobalMapFormed = true;
+            Console.WriteLine($"[GlobalMap] Global map formed: all {expected.Count} players (" + string.Join(", ", expected.Order()) + $") share map {subMapID}. " +
+                              $"Global origin is the average position of {counted} players, <{_globalOrigin.X:0.00}, {_globalOrigin.Y:0.00}, {_globalOrigin.Z:0.00}> in that map's frame.");
+        }
+
+        #endregion Global Map State
 
         #region Key Frame Construction
 
@@ -716,7 +868,7 @@ namespace Server.Manager.SpatialSync
 
         #endregion Map Points
 
-        #region Merging sub-maps
+        #region Merging Sub-Maps
 
         /// <summary>
         /// Look for another sub-map that overlaps this key frame's surroundings. The map points around the key frame (its
@@ -738,11 +890,14 @@ namespace Server.Manager.SpatialSync
                 if (!TryAlignSubMaps(keyFrame, window, other, out RigidTransform otherToThis, out var pairs, out int verified))
                     continue;
 
-                // The sub-map with the lower ID (the older one) survives, so a merged map keeps the older player's frame.
+                // The sub-map with the lower ID (the older one) survives, so a merged map keeps the older player's frame. Once the global
+                // map has formed its frame is fixed (global poses and the global origin are defined in it), so the global sub-map always
+                // survives, even when a later joiner's sub-map is the older one.
+                bool otherSurvives = other.ID == _globalSubMapID || (subMap.ID != _globalSubMapID && other.ID < subMap.ID);
                 SubMap survivor, absorbed;
                 RigidTransform absorbedToSurvivor;
                 var fusePairs = new List<(MapPoint Keep, MapPoint Remove)>(pairs.Count);
-                if (other.ID < subMap.ID)
+                if (otherSurvives)
                 {
                     survivor = other;
                     absorbed = subMap;
@@ -1013,9 +1168,13 @@ namespace Server.Manager.SpatialSync
                 survivor.PlayerIDs.Add(playerID);
                 _subMapIDByPlayer[playerID] = survivor.ID;
                 _playerToMap[playerID] = absorbedToSurvivor.Compose(_playerToMap.GetValueOrDefault(playerID, RigidTransform.Identity));
+                if (_lastKnownPositionInMap.TryGetValue(playerID, out Vector3 lastKnownPosition))
+                    _lastKnownPositionInMap[playerID] = absorbedToSurvivor.Apply(lastKnownPosition);
             }
             survivor.IsAligned = true;
             _subMaps.Remove(absorbed.ID);
+            if (absorbed.ID == _globalSubMapID)
+                _globalSubMapID = survivor.ID;
 
             // Fuse the points both maps had: the survivor's point takes over every observation of the absorbed one.
             var affected = new HashSet<int>();
@@ -1053,8 +1212,7 @@ namespace Server.Manager.SpatialSync
             _mapVersion++;
         }
 
-        #endregion Merging sub-maps
-
+        #endregion Merging Sub-Maps
 
         #region Snapshots
 
