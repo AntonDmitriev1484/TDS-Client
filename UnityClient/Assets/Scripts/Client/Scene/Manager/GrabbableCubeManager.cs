@@ -39,6 +39,8 @@ namespace Client.Scene.Manager
         [Tooltip("How long a pinch on a cube survives while the hand is untracked (seconds).")]
         [SerializeField] float _trackingLossTolerance = 0.5f;
 
+        private GameObject _sharedSceneGameObject;
+
         /// <summary>A hand started pinching on a cube.</summary>
         public event Action<GrabbableCube, OVRHand> PinchStarted;
 
@@ -71,6 +73,10 @@ namespace Client.Scene.Manager
 
             if (_hands.Count == 0)
                 Debug.LogError($"{nameof(GrabbableCubeManager)}: no OVRHand found in the scene.");
+
+            _sharedSceneGameObject = GameObject.Find("SharedScene");
+            if (_sharedSceneGameObject == null)
+                Debug.LogError($"{nameof(GrabbableCubeManager)}: no GameObject named 'SharedScene' found in the scene.");
         }
 
         /// <summary>
@@ -85,7 +91,9 @@ namespace Client.Scene.Manager
 
             var go = GameObject.CreatePrimitive(PrimitiveType.Cube);
             go.name = $"GrabbableCube ({id})";
-            go.transform.SetPositionAndRotation(pose.position, pose.rotation);
+            go.transform.SetParent(_sharedSceneGameObject.transform, false);
+            go.transform.localPosition = pose.position;
+            go.transform.localRotation = pose.rotation;
             go.transform.localScale = Vector3.one * _cubeSize;
 
             // Kinematic so it stays put when released: there is no physical floor in passthrough.

@@ -32,8 +32,8 @@ namespace Client.Scene.Manager
         public bool IsCameraReady => _cameraAccess != null && _cameraAccess.IsPlaying;
 
         private long _keyFrameID = 0;
-        private float _sendRate = 1;
-        private float _tickInterval => 1.0f / _sendRate;
+        public float SendRate = 5.0f;
+        private float _tickInterval => 1.0f / SendRate;
         private Task<bool> _pendingSend; // Key frame currently being serialized/sent, if any
 
         private const string HeadsetCameraPermission = "horizonos.permission.HEADSET_CAMERA";
@@ -318,7 +318,7 @@ namespace Client.Scene.Manager
             var keyFrame = new KeyFrameDTO
             {
                 ID = _keyFrameID,
-                CameraPose = Conversions.ToSharedPose(cameraPose),
+                CameraLocalPose = Conversions.ToSharedPose(cameraPose),
                 CameraIntrinsics = Conversions.ToSharedCameraIntrinsics(cameraIntrinsics),
                 Timestamp = timestamp,
                 Width = size.x,

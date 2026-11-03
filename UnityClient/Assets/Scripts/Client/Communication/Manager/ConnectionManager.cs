@@ -4,6 +4,7 @@ using Newtonsoft.Json.Linq;
 using SharedLibrary.Communication.Connection;
 using SharedLibrary.Communication.DataTransferObjects;
 using SharedLibrary.Communication.DataTransferObjects.Game;
+using SharedLibrary.Communication.DataTransferObjects.SpatialSync;
 using SharedLibrary.Utilities;
 using System;
 using System.Collections;
@@ -78,6 +79,8 @@ namespace Client.Communication.Manager
             typeof(SingleActionDTO),
             typeof(GameStateDTO),
             typeof(ResponseDTO),
+            typeof(SyncResponseDTO),
+            typeof(CoordFrameSyncDTO),
         };
 
         #endregion Events

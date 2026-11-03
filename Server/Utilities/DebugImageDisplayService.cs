@@ -1,6 +1,7 @@
+using Server.Manager.SpatialSync;
 using SharedLibrary.Communication.DataTransferObjects.SpatialSync;
 
-namespace Server.Manager.SpatialSync
+namespace Server.Utilities
 {
     internal sealed class DebugImageDisplayService : IDisposable
     {

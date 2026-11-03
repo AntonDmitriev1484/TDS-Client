@@ -21,7 +21,7 @@ namespace SharedLibrary.Communication.DataTransferObjects.SpatialSync
         public long ID { get; set; }
 
         /// <summary>World-space pose of the camera at the moment the image was captured.</summary>
-        public Pose CameraPose { get; set; }
+        public Pose CameraLocalPose { get; set; }
 
         /// <summary>
         /// Properties of the camera that took the snapshot.

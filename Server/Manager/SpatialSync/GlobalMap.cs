@@ -3,6 +3,56 @@ using Server.Utilities;
 
 namespace Server.Manager.SpatialSync
 {
+    /// <summary>
+    /// A rotation followed by a translation: moves points from one coordinate frame into another (a device's tracking space
+    /// into the map frame, or one sub-map's frame into another's).
+    /// </summary>
+    public readonly struct RigidTransform
+    {
+        public Quaternion Rotation { get; }
+        public Vector3 Translation { get; }
+
+        public RigidTransform(Quaternion rotation, Vector3 translation)
+        {
+            Rotation = Quaternion.Normalize(rotation);
+            Translation = translation;
+        }
+
+        public static RigidTransform Identity => new(Quaternion.Identity, Vector3.Zero);
+
+        public Vector3 Apply(Vector3 point) => Vector3.Transform(point, Rotation) + Translation;
+        public Vector3 ApplyToDirection(Vector3 direction) => Vector3.Transform(direction, Rotation);
+        public Quaternion Apply(Quaternion orientation) => Quaternion.Normalize(Rotation * orientation);
+
+        /// <summary>The transform that applies <paramref name="first"/> and then this one.</summary>
+        public RigidTransform Compose(RigidTransform first) => new(Rotation * first.Rotation, Apply(first.Translation));
+
+        public RigidTransform Inverse()
+        {
+            Quaternion inverse = Quaternion.Conjugate(Rotation);
+            return new RigidTransform(inverse, -Vector3.Transform(Translation, inverse));
+        }
+
+        /// <summary>Rotation about the vertical axis, in degrees (meaningful for the yaw-only transforms the merge produces).</summary>
+        public float YawDegrees
+        {
+            get
+            {
+                Vector3 forward = Vector3.Transform(Vector3.UnitZ, Rotation);
+                return MathF.Atan2(forward.X, forward.Z) * (180f / MathF.PI);
+            }
+        }
+
+        public Matrix4x4 ToMatrix()
+        {
+            Matrix4x4 matrix = Matrix4x4.CreateFromQuaternion(Rotation);
+            matrix.Translation = Translation;
+            return matrix;
+        }
+
+        public override string ToString() => $"yaw {YawDegrees:0.0} deg, shift ({Translation.X:0.00}, {Translation.Y:0.00}, {Translation.Z:0.00}) m";
+    }
+
     /// <summary>Tuning values for building the global map. Defaults follow ORB-SLAM where it has an equivalent.</summary>
     public sealed class GlobalMappingParameters
     {
@@ -15,8 +65,20 @@ namespace Server.Manager.SpatialSync
         /// <summary>... or rotated at least this much (degrees), otherwise it adds no new information and is skipped.</summary>
         public float MinRotationDegrees { get; init; } = 3f;
 
-        /// <summary>How many of the player's most recent key frames a new key frame is matched against.</summary>
-        public int NeighborKeyFrameCount { get; init; } = 3;
+        /// <summary>How many covisible key frames a new key frame is triangulated against (the strongest links, plus the latest key frame).</summary>
+        public int NeighborKeyFrameCount { get; init; } = 5;
+
+        /// <summary>
+        /// When a map point is projected into a new key frame, its descriptor is compared with the keypoints within this many
+        /// pixels of where it lands (scaled up for coarser pyramid levels). The headset pose is not perfect, so keep some slack.
+        /// </summary>
+        public float ProjectionSearchRadiusPixels { get; init; } = 12f;
+
+        /// <summary>A map point is only expected to be seen from within this angle of the directions it was seen from before.</summary>
+        public float MaxViewAngleDegrees { get; init; } = 60f;
+
+        /// <summary>A young map point that was found in fewer than this fraction of the key frames it should be visible in is culled.</summary>
+        public float MinFoundRatio { get; init; } = 0.25f;
 
         /// <summary>Two viewing rays closer together than this cannot be triangulated reliably.</summary>
         public float MinParallaxDegrees { get; init; } = 1f;
@@ -45,13 +107,29 @@ namespace Server.Manager.SpatialSync
 
         public ORBExtractorParameters ExtractorParameters { get; init; } = new() { MaxDegreeOfParallelism = Math.Min(4, Environment.ProcessorCount) };
         public ORBMatchParameters MatchParameters { get; init; } = ORBMatchParameters.Default;
+
+        // ----- Merging sub-maps -----
+
+        /// <summary>Descriptor-matched map point pairs between two sub-maps that must agree on one transform for them to be merged.</summary>
+        public int MinMergeInliers { get; init; } = 20;
+
+        /// <summary>A matched pair agrees with a candidate transform if the points land within this distance of each other.</summary>
+        public float MergeInlierDistanceMeters { get; init; } = 0.15f;
+
+        public int MergeRansacIterations { get; init; } = 300;
+
+        /// <summary>
+        /// After a transform is found, the other sub-map's points are projected into the new key frame; at least this many must
+        /// land on matching keypoints. This checks the transform against the image itself, not only against the 3D points.
+        /// </summary>
+        public int MinMergeVerificationMatches { get; init; } = 15;
     }
 
     /// <summary>A 3D point of the map, triangulated from two or more key frames with known camera poses.</summary>
     public sealed class MapPoint
     {
-        public int Id { get; init; }
-        public int SubMapId { get; init; }
+        public int ID { get; init; }
+        public int SubMapID { get; set; }
 
         /// <summary>Position in the owning sub-map's own coordinate frame (the player's tracking space).</summary>
         public Vector3 Position { get; set; }
@@ -65,17 +143,28 @@ namespace Server.Manager.SpatialSync
         /// <summary>Mean unit vector from the point towards the cameras that see it.</summary>
         public Vector3 MeanViewDirection { get; set; }
 
-        public int ReferenceKeyFrameId { get; set; }
+        public int ReferenceKeyFrameID { get; set; }
+
+        /// <summary>
+        /// Range of distances from which the point can be recognised (from the pyramid level it was first detected on). A point
+        /// is only searched for in a key frame whose camera is within this range.
+        /// </summary>
+        public float MinDistance { get; init; }
+        public float MaxDistance { get; init; }
+
+        /// <summary>Key frames the point should have been visible in, and the ones it was actually found in (both start at 1).</summary>
+        public int VisibleCount { get; set; } = 1;
+        public int FoundCount { get; set; } = 1;
 
         /// <summary>Sequence number of the key frame that created the point (for culling young, unconfirmed points).</summary>
-        public int CreatedSequence { get; init; }
+        public int CreatedSequence { get; set; }
     }
 
     /// <summary>A key frame in the map: camera pose, ORB features and which feature sees which map point.</summary>
     public sealed class MapKeyFrame
     {
-        public int Id { get; init; }
-        public int SubMapId { get; init; }
+        public int ID { get; init; }
+        public int SubMapID { get; set; }
         public int PlayerID { get; init; }
 
         /// <summary>The ID the client gave this key frame.</summary>
@@ -83,11 +172,11 @@ namespace Server.Manager.SpatialSync
         public DateTime Timestamp { get; init; }
 
         /// <summary>Order of insertion within the sub-map, starting at 0.</summary>
-        public int Sequence { get; init; }
+        public int Sequence { get; set; }
 
         /// <summary>Camera pose in the sub-map frame (camera-to-world).</summary>
-        public Vector3 Position { get; init; }
-        public Quaternion Rotation { get; init; }
+        public Vector3 Position { get; set; }
+        public Quaternion Rotation { get; set; }
         private Quaternion _inverseRotation;
 
         public int Width { get; init; }
@@ -103,7 +192,7 @@ namespace Server.Manager.SpatialSync
         public ORBFeatureSet Features { get; init; } = ORBFeatureSet.Empty;
 
         /// <summary>Per feature: ID of the map point it observes, or -1.</summary>
-        public int[] MapPointIds { get; init; } = Array.Empty<int>();
+        public int[] MapPointIDs { get; init; } = Array.Empty<int>();
 
         /// <summary>Per feature: pyramid scale (ScaleFactor ^ octave).</summary>
         public float[] LevelScale { get; init; } = Array.Empty<float>();
@@ -140,31 +229,39 @@ namespace Server.Manager.SpatialSync
 
     /// <summary>
     /// A set of key frames and map points that share one coordinate frame. Each player starts in a sub-map of their own
-    /// (their device's tracking space). Once two sub-maps are matched, one gets a <see cref="ToGlobal"/> transform.
+    /// (their device's tracking space). When two sub-maps are found to overlap they are merged into one: the absorbed
+    /// sub-map's key frames and points are moved into the surviving sub-map's frame, which is then the shared frame of
+    /// all the players in it.
     /// </summary>
     public sealed class SubMap
     {
-        public int Id { get; init; }
-        public int PlayerID { get; init; }
+        public int ID { get; init; }
+
+        /// <summary>Every player whose key frames are in this sub-map (more than one after a merge).</summary>
+        public HashSet<int> PlayerIDs { get; } = new();
         public Dictionary<int, MapKeyFrame> KeyFrames { get; } = new();
         public List<MapKeyFrame> OrderedKeyFrames { get; } = new();
         public Dictionary<int, MapPoint> Points { get; } = new();
 
         /// <summary>IDs of points young enough that they may still be culled.</summary>
-        public List<int> RecentPointIds { get; } = new();
+        public List<int> RecentPointIDs { get; } = new();
 
-        /// <summary>Sub-map frame -> global frame. Identity until the sub-map has been aligned with another.</summary>
+        /// <summary>Sub-map frame -> global frame. Identity: merged sub-maps already share the surviving sub-map's frame.</summary>
         public Matrix4x4 ToGlobal { get; set; } = Matrix4x4.Identity;
+
+        /// <summary>True once other players' sub-maps have been merged into this one.</summary>
         public bool IsAligned { get; set; }
     }
 
-    public sealed record KeyFrameInsertResult(bool Inserted, string Reason, int Features, int NewMapPoints, int TrackedMapPoints);
+    public sealed record KeyFrameInsertResult(bool Inserted, string Reason, int Features, int NewMapPoints, int TrackedMapPoints, bool Merged = false, string MergeDescription = "");
 
     // ----- Immutable view of the map for the debug window (already in the global frame) -----
 
-    public sealed record MapSnapshotKeyFrame(int Id, int Sequence, Vector3 Position, Vector3 Forward);
+    public sealed record MapSnapshotKeyFrame(int ID, int PlayerID, int Sequence, Vector3 Position, Vector3 Forward);
 
-    public sealed record MapSnapshotSubMap(int Id, int PlayerID, bool IsAligned, MapSnapshotKeyFrame[] KeyFrames, Vector3[] Points);
+    public sealed record MapSnapshotPoint(Vector3 Position, int PlayerID);
+
+    public sealed record MapSnapshotSubMap(int ID, int[] PlayerIDs, bool IsAligned, MapSnapshotKeyFrame[] KeyFrames, MapSnapshotPoint[] Points);
 
     public sealed record GlobalMapSnapshot(long Version, MapSnapshotSubMap[] SubMaps);
 }

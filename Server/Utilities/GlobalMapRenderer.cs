@@ -1,9 +1,9 @@
-﻿using System.Drawing;
+﻿using Server.Manager.SpatialSync;
 using System.Drawing.Drawing2D;
 using System.Drawing.Text;
 using System.Numerics;
 
-namespace Server.Manager.SpatialSync
+namespace Server.Utilities
 {
     /// <summary>Draws a top-down view of the global map for the debug window.</summary>
     internal static class GlobalMapRenderer
@@ -65,8 +65,8 @@ namespace Server.Manager.SpatialSync
             float minX = xs.Min(), maxX = xs.Max(), minZ = zs.Min(), maxZ = zs.Max();
             if (totalPoints >= 20)
             {
-                float[] px = snapshot.SubMaps.SelectMany(s => s.Points).Select(p => p.X).OrderBy(v => v).ToArray();
-                float[] pz = snapshot.SubMaps.SelectMany(s => s.Points).Select(p => p.Z).OrderBy(v => v).ToArray();
+                float[] px = snapshot.SubMaps.SelectMany(s => s.Points).Select(p => p.Position.X).OrderBy(v => v).ToArray();
+                float[] pz = snapshot.SubMaps.SelectMany(s => s.Points).Select(p => p.Position.Z).OrderBy(v => v).ToArray();
                 minX = MathF.Min(minX, px[(int)(px.Length * 0.02)]);
                 maxX = MathF.Max(maxX, px[(int)((px.Length - 1) * 0.98)]);
                 minZ = MathF.Min(minZ, pz[(int)(pz.Length * 0.02)]);
@@ -104,44 +104,51 @@ namespace Server.Manager.SpatialSync
                 g.DrawString($"{z:0.##}", font, dimBrush, plot.X + 3, a.Y - 15);
             }
 
-            // ----- Map points, then key frames on top -----
+            // ----- Map points (coloured by the player who first saw them), then key frames on top -----
             foreach (MapSnapshotSubMap subMap in snapshot.SubMaps)
             {
-                using var pointBrush = new SolidBrush(Color.FromArgb(200, PlayerColor(subMap.PlayerID)));
-                foreach (Vector3 point in subMap.Points)
+                foreach (IGrouping<int, MapSnapshotPoint> byPlayer in subMap.Points.GroupBy(p => p.PlayerID))
                 {
-                    PointF s = ToScreen(point.X, point.Z);
-                    g.FillRectangle(pointBrush, s.X - 1.5f, s.Y - 1.5f, 3f, 3f);
+                    using var pointBrush = new SolidBrush(Color.FromArgb(200, PlayerColor(byPlayer.Key)));
+                    foreach (MapSnapshotPoint point in byPlayer)
+                    {
+                        PointF s = ToScreen(point.Position.X, point.Position.Z);
+                        g.FillRectangle(pointBrush, s.X - 1.5f, s.Y - 1.5f, 3f, 3f);
+                    }
                 }
             }
 
+            // After a merge one map holds several players' key frames, so trajectories are drawn per player.
             foreach (MapSnapshotSubMap subMap in snapshot.SubMaps)
             {
-                Color color = PlayerColor(subMap.PlayerID);
-                using var trajectoryPen = new Pen(Color.FromArgb(140, color), 1.5f);
-                using var headingPen = new Pen(color, 2f);
-                using var keyFrameBrush = new SolidBrush(color);
-                using var latestPen = new Pen(Color.White, 2f);
-
-                PointF[] path = subMap.KeyFrames.Select(k => ToScreen(k.Position.X, k.Position.Z)).ToArray();
-                if (path.Length >= 2)
-                    g.DrawLines(trajectoryPen, path);
-
-                for (int i = 0; i < subMap.KeyFrames.Length; i++)
+                foreach (IGrouping<int, MapSnapshotKeyFrame> byPlayer in subMap.KeyFrames.GroupBy(k => k.PlayerID))
                 {
-                    MapSnapshotKeyFrame kf = subMap.KeyFrames[i];
-                    PointF s = path[i];
-                    var look = new Vector2(kf.Forward.X, kf.Forward.Z);
-                    if (look.LengthSquared() > 1e-6f)
-                    {
-                        look = Vector2.Normalize(look);
-                        g.DrawLine(headingPen, s, new PointF(s.X + look.X * 16f, s.Y - look.Y * 16f));
-                    }
-                    g.FillEllipse(keyFrameBrush, s.X - 3.5f, s.Y - 3.5f, 7f, 7f);
-                }
+                    Color color = PlayerColor(byPlayer.Key);
+                    using var trajectoryPen = new Pen(Color.FromArgb(140, color), 1.5f);
+                    using var headingPen = new Pen(color, 2f);
+                    using var keyFrameBrush = new SolidBrush(color);
+                    using var latestPen = new Pen(Color.White, 2f);
 
-                PointF last = path[^1];
-                g.DrawEllipse(latestPen, last.X - 7f, last.Y - 7f, 14f, 14f);
+                    MapSnapshotKeyFrame[] keyFrames = byPlayer.OrderBy(k => k.Sequence).ToArray();
+                    PointF[] path = keyFrames.Select(k => ToScreen(k.Position.X, k.Position.Z)).ToArray();
+                    if (path.Length >= 2)
+                        g.DrawLines(trajectoryPen, path);
+
+                    for (int i = 0; i < keyFrames.Length; i++)
+                    {
+                        PointF s = path[i];
+                        var look = new Vector2(keyFrames[i].Forward.X, keyFrames[i].Forward.Z);
+                        if (look.LengthSquared() > 1e-6f)
+                        {
+                            look = Vector2.Normalize(look);
+                            g.DrawLine(headingPen, s, new PointF(s.X + look.X * 16f, s.Y - look.Y * 16f));
+                        }
+                        g.FillEllipse(keyFrameBrush, s.X - 3.5f, s.Y - 3.5f, 7f, 7f);
+                    }
+
+                    PointF last = path[^1];
+                    g.DrawEllipse(latestPen, last.X - 7f, last.Y - 7f, 14f, 14f);
+                }
             }
 
             g.ResetClip();
@@ -154,14 +161,24 @@ namespace Server.Manager.SpatialSync
             float legendY = plot.Y + 8;
             foreach (MapSnapshotSubMap subMap in snapshot.SubMaps)
             {
-                using var swatch = new SolidBrush(PlayerColor(subMap.PlayerID));
-                g.FillEllipse(swatch, plot.X + 10, legendY + 3, 9, 9);
-                string aligned = subMap.IsAligned ? "aligned" : "own frame";
-                g.DrawString($"Player {subMap.PlayerID}: {subMap.KeyFrames.Length} key frames, {subMap.Points.Length} points ({aligned})", font, textBrush, plot.X + 26, legendY);
-                legendY += 18;
+                string players = string.Join(", ", subMap.PlayerIDs);
+                string state = subMap.IsAligned ? "merged: one shared frame" : "own device frame";
+                g.DrawString($"Map {subMap.ID} (player{(subMap.PlayerIDs.Length > 1 ? "s" : "")} {players}) - {state}", boldFont, textBrush, plot.X + 10, legendY);
+                legendY += 20;
+
+                foreach (int playerID in subMap.PlayerIDs)
+                {
+                    using var swatch = new SolidBrush(PlayerColor(playerID));
+                    g.FillEllipse(swatch, plot.X + 22, legendY + 3, 9, 9);
+                    int keyFrames = subMap.KeyFrames.Count(k => k.PlayerID == playerID);
+                    int points = subMap.Points.Count(p => p.PlayerID == playerID);
+                    g.DrawString($"Player {playerID}: {keyFrames} key frames, {points} points", font, textBrush, plot.X + 38, legendY);
+                    legendY += 18;
+                }
+                legendY += 6;
             }
 
-            g.DrawString("Top-down view: X right, Z up, metres. White ring = latest key frame. Unaligned players are drawn in their own device frames, so they will not line up yet.",
+            g.DrawString("Top-down view: X right, Z up, metres. White ring = a player's latest key frame. Players in the same map share one frame; separate maps are drawn in their own device frames and do not line up.",
                 font, dimBrush, margin, height - footer + 10);
             return bitmap;
         }

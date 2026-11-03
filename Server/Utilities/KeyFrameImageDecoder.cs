@@ -1,8 +1,7 @@
-﻿using System.Drawing;
-using System.Drawing.Imaging;
+﻿using System.Drawing.Imaging;
 using System.Runtime.InteropServices;
 
-namespace Server.Manager.SpatialSync
+namespace Server.Utilities
 {
     /// <summary>Decodes the JPEG/PNG image of a key frame into 8-bit luma for ORB feature extraction.</summary>
     internal static class KeyFrameImageDecoder
