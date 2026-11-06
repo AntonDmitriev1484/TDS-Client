@@ -1,7 +1,8 @@
-﻿using SharedLibrary.Communication.DataTransferObjects.SpatialSync;
+﻿using Server.Manager.SpatialSync;
+using SharedLibrary.Communication.DataTransferObjects.SpatialSync;
 using System.Numerics;
 
-namespace Server.Manager.SpatialSync
+namespace Server.Utilities
 {
     /// <summary>How headsets' scene anchors are matched with each other and how the headsets are lined up from them.</summary>
     public sealed class SceneAnchorMapParameters

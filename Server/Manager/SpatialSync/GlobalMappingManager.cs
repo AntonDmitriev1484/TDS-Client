@@ -1,4 +1,5 @@
-﻿using SharedLibrary.Communication.DataTransferObjects.SpatialSync;
+﻿using Server.Utilities;
+using SharedLibrary.Communication.DataTransferObjects.SpatialSync;
 using System.Numerics;
 using SharedPose = SharedLibrary.Game.Actions.Pose;
 using SharedQuaternion = SharedLibrary.Game.Quaternion;

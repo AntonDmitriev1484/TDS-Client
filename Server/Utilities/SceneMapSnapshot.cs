@@ -1,6 +1,6 @@
 ﻿using System.Numerics;
 
-namespace Server.Manager.SpatialSync
+namespace Server.Utilities
 {
     /// <summary>One scene anchor as the viewer draws it, in the frame of the sub-map it is in.</summary>
     /// <param name="Kind">"Wall" (vertical surface), "Floor", "Ceiling" or "Volume".</param>
