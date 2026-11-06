@@ -199,9 +199,9 @@ namespace Server.Handler
             try
             {
                 // Handle the message based on its type
-                if (typeString == typeof(KeyFrameDTO).Name)
+                if (typeString == typeof(KeyFrameAnchorDTO).Name)
                 {
-                    KeyFrameDTO keyFrameDTO = data.ToObject<KeyFrameDTO>();
+                    KeyFrameAnchorDTO keyFrameDTO = data.ToObject<KeyFrameAnchorDTO>();
 
                     await ProcessKeyFrameAsync(webSocket, playerID, keyFrameDTO);
                 }
@@ -221,15 +221,14 @@ namespace Server.Handler
 
 
         /// <summary>
-        /// Processes an incoming single action DTO. Send a success/error if the single action DTO is accepted.
+        /// Processes an incoming key frame DTO (the spatial anchors of a headset). Send a success/error if the key frame DTO is accepted.
         /// </summary>
-        /// <param name="webSocket">The web socket that received a single action DTO.</param>
-        /// <param name="actionDTO">The single action DTO.</param>
+        /// <param name="webSocket">The web socket that received a key frame DTO.</param>
+        /// <param name="playerID">The ID of the player that sent the key frame.</param>
+        /// <param name="keyFrameDTO">The key frame DTO.</param>
         /// <returns></returns>
-        private async Task ProcessKeyFrameAsync(WebSocket webSocket, int playerID, KeyFrameDTO keyFrameDTO)
+        private async Task ProcessKeyFrameAsync(WebSocket webSocket, int playerID, KeyFrameAnchorDTO keyFrameDTO)
         {
-            Console.WriteLine($"\nIncoming KeyFrame for:\nPlayer ID: {playerID}\nWidth x Height: {keyFrameDTO.Width}x{keyFrameDTO.Height}\n");
-
             ServerSpatialSyncManager? spatialSyncManagerNullable;
 
             using (var scope = _scopeFactory.CreateScope())

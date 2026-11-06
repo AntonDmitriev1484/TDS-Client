@@ -7,6 +7,25 @@
     <ImplicitUsings>enable</ImplicitUsings>
   </PropertyGroup>
 
+  <!-- The point cloud mapping is archived: kept for reference, not compiled. Remove this item to build it again. -->
+  <ItemGroup>
+    <Compile Remove="**\Archived\**" />
+  </ItemGroup>
+  <ItemGroup>
+    <Compile Include="Archived\Communication\DataTransferObjects\SpatialSync\KeyFrameImageDTO.cs" />
+    <Compile Include="Archived\Manager\SpatialSync\CloudAlignment.cs" />
+    <Compile Include="Archived\Manager\SpatialSync\FreeSpace.cs" />
+    <Compile Include="Archived\Manager\SpatialSync\GlobalMap.cs" />
+    <Compile Include="Archived\Manager\SpatialSync\GlobalMappingManager.cs" />
+    <Compile Include="Archived\Manager\SpatialSync\MapAnchors.cs" />
+    <Compile Include="Archived\Manager\SpatialSync\PointFreshness.cs" />
+    <Compile Include="Archived\Manager\SpatialSync\SemiGlobalMatcher.cs" />
+    <Compile Include="Archived\Manager\SpatialSync\StereoDepthEstimator.cs" />
+    <Compile Include="Archived\Manager\SpatialSync\ViewedRegion.cs" />
+    <Compile Include="Archived\Utilities\GlobalMapRenderer.cs" />
+    <Compile Include="Archived\Utilities\PointCloudView.cs" />
+  </ItemGroup>
+
   <ItemGroup>
     <ProjectReference Include="..\SharedLibrary\SharedLibrary.csproj" />
   </ItemGroup>

@@ -7135,6 +7135,50 @@ MonoBehaviour:
   _menuFadeDuration: 0.5
   _playButton: {fileID: 2132541220}
   _statusText: {fileID: 1925199034}
+--- !u!1 &489184470
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 489184471}
+  - component: {fileID: 489184472}
+  m_Layer: 0
+  m_Name: SceneAnchorManager
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!4 &489184471
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 489184470}
+  serializedVersion: 2
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 1341966536}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!114 &489184472
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 489184470}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 77483a0dfbb18e44d990d838a3e332ac, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
 --- !u!1 &510019383
 GameObject:
   m_ObjectHideFlags: 0
@@ -16698,6 +16742,7 @@ Transform:
   - {fileID: 1727540388}
   - {fileID: 478829715}
   - {fileID: 1627865297}
+  - {fileID: 489184471}
   m_Father: {fileID: 0}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
 --- !u!1001 &1342692910
@@ -20345,11 +20390,7 @@ MonoBehaviour:
   m_EditorClassIdentifier: 
   SendRate: 5
   SyncedSendRate: 1
-  _cameraAccess: {fileID: 0}
-  _requestedResolution: {x: 1280, y: 960}
-  _imageFormat: 0
-  _jpegQuality: 90
-  _debugSaveKeyFramePng: 0
+  AlignmentBlendSeconds: 1
 --- !u!1 &1629135545
 GameObject:
   m_ObjectHideFlags: 0
@@ -26359,7 +26400,7 @@ Transform:
   m_GameObject: {fileID: 2134282310}
   serializedVersion: 2
   m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
-  m_LocalPosition: {x: -0.603, y: -2.79, z: 7.4}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
   m_LocalScale: {x: 1, y: 1, z: 1}
   m_ConstrainProportionsScale: 0
   m_Children:

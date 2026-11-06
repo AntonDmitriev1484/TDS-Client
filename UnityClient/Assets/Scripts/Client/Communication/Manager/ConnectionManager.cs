@@ -80,6 +80,7 @@ namespace Client.Communication.Manager
             typeof(GameStateDTO),
             typeof(ResponseDTO),
             typeof(SyncResponseDTO),
+            typeof(BeginSpatialSyncDTO),
         };
 
         #endregion Events

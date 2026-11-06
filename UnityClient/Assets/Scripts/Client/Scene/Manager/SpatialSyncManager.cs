@@ -1,19 +1,11 @@
-using Assets.Scripts.Utilities;
+﻿using Assets.Scripts.Utilities;
 using Client.Communication.Manager;
-using Meta.XR;
 using SharedLibrary.Communication.Connection;
 using SharedLibrary.Communication.DataTransferObjects.SpatialSync;
-using System;
 using System.Collections;
-using System.IO;
 using System.Threading.Tasks;
-using Unity.Collections;
 using UnityEngine;
 using UnityEngine.Events;
-using UnityEngine.Experimental.Rendering;
-#if UNITY_ANDROID && !UNITY_EDITOR
-using UnityEngine.Android;
-#endif
 
 namespace Client.Scene.Manager
 {
@@ -26,9 +18,6 @@ namespace Client.Scene.Manager
         public bool IsInitialized { get; set; }
 
 
-        /// <summary>True once the passthrough camera is delivering images.</summary>
-        public bool IsCameraReady => _cameraAccess != null && _cameraAccess.IsPlaying;
-
         private long _keyFrameID = 0;
         [Tooltip("Key frames per second while the global map is not ready for this device yet, so it is joined as soon as possible.")]
         public float SendRate = 5.0f;
@@ -38,25 +27,18 @@ namespace Client.Scene.Manager
         private float _tickInterval => 1.0f / (_isGloballyAligned ? SyncedSendRate : SendRate);
         private Task<bool> _pendingSend; // Key frame currently being serialized/sent, if any
 
-        private const string HeadsetCameraPermission = "horizonos.permission.HEADSET_CAMERA";
-        private const float PermissionTimeoutSeconds = 60f;
-        private const float CameraStartTimeoutSeconds = 10f;
+        [Tooltip("Seconds the shared scene takes to move to a new alignment from the server. The very first alignment is applied immediately; " +
+                 "every later one is blended in so corrections don't make the scene jump. 0 applies them immediately too.")]
+        public float AlignmentBlendSeconds = 1.0f;
+        private bool _hasAppliedGlobalPose = false; // True once the first global pose has been applied (that one is not blended)
+        private bool _isBlending = false;
+        private float _blendElapsed;
+        private Vector3 _blendStartPosition;
+        private Quaternion _blendStartRotation;
+        private Vector3 _blendTargetPosition;
+        private Quaternion _blendTargetRotation;
 
-        [Header("Passthrough Camera")]
-        [Tooltip("Leave empty to find one in the scene or create one automatically.")]
-        [SerializeField] private PassthroughCameraAccess _cameraAccess;
-        [SerializeField] private Vector2Int _requestedResolution = new Vector2Int(1280, 960);
-
-        [Header("Key Frame Image")]
-        [Tooltip("File format the key frame image is compressed to before sending. JPEG is much smaller; PNG is lossless but saves little on camera images.")]
-        [SerializeField] private KeyFrameImageFormat _imageFormat = KeyFrameImageFormat.Jpeg;
-        [Tooltip("JPEG quality, 1-100. Around 90 keeps ORB features essentially unchanged.")]
-        [Range(1, 100)]
-        [SerializeField] private int _jpegQuality = 90;
-
-        [Header("Debug")]
-        [Tooltip("Write every extracted key frame's compressed image to Application.persistentDataPath, to check image orientation.")]
-        [SerializeField] private bool _debugSaveKeyFramePng = false;
+        private SceneAnchorManager _anchorManager;
 
         private SyncResponseDTO _latestSyncResponseDTO = null;
         readonly object _syncResponseLock = new object();
@@ -80,6 +62,12 @@ namespace Client.Scene.Manager
 
                 // Set initial variables on spatial sync settings
                 IsInitialized = false;
+
+                // The scene anchors of the headset's room scan (walls, floor, doors, furniture...) are what the server lines the headsets up with.
+                // Made right away, so the room is scanned and loaded as soon as the app starts rather than after the connection is up.
+                _anchorManager = GetComponent<SceneAnchorManager>();
+                if (_anchorManager == null)
+                    _anchorManager = gameObject.AddComponent<SceneAnchorManager>();
 
                 // Wait for necessary objects before initializing spatial sync manager
                 StartCoroutine(WaitToInitialize());
@@ -121,72 +109,8 @@ namespace Client.Scene.Manager
             if (ConnectionManager.Instance.InboundMessagesDict.TryGetValue(typeof(BeginSpatialSyncDTO), out var bssEvent))
                 ((UnityEvent<BeginSpatialSyncDTO>)bssEvent).AddListener(OnBeginSpatialSyncDTOReceived);
 
-            yield return StartCoroutine(InitializeCameraCoroutine());
-
-            IsInitialized = IsCameraReady;
-        }
-
-        /// <summary>
-        /// Request the headset camera permission, make sure a PassthroughCameraAccess component exists and wait until it delivers images.
-        /// </summary>
-        private IEnumerator InitializeCameraCoroutine()
-        {
-#if UNITY_ANDROID && !UNITY_EDITOR
-            if (!Permission.HasUserAuthorizedPermission(HeadsetCameraPermission))
-            {
-                Permission.RequestUserPermission(HeadsetCameraPermission);
-
-                float permissionDeadline = Time.realtimeSinceStartup + PermissionTimeoutSeconds;
-                while (!Permission.HasUserAuthorizedPermission(HeadsetCameraPermission)
-                       && Time.realtimeSinceStartup < permissionDeadline)
-                {
-                    yield return null;
-                }
-            }
-
-            if (!Permission.HasUserAuthorizedPermission(HeadsetCameraPermission))
-            {
-                Debug.LogError($"[SpatialSync] {HeadsetCameraPermission} was not granted; key frames cannot be extracted.");
-                yield break;
-            }
-#endif
-
-            if (_cameraAccess == null)
-            {
-                _cameraAccess = FindFirstObjectByType<PassthroughCameraAccess>(FindObjectsInactive.Include);
-            }
-
-            if (_cameraAccess == null)
-            {
-                _cameraAccess = CreateCameraAccess();
-            }
-
-            float cameraDeadline = Time.realtimeSinceStartup + CameraStartTimeoutSeconds;
-            while (!_cameraAccess.IsPlaying && Time.realtimeSinceStartup < cameraDeadline)
-            {
-                yield return null;
-            }
-
-            if (!_cameraAccess.IsPlaying)
-            {
-                Debug.LogError($"[{nameof(SpatialSyncManager)}] Passthrough camera did not start. " +
-                               "Check OVRManager > 'Enabled Passthrough Camera Access' and that this is a Quest 3/3S.");
-            }
-        }
-
-        private PassthroughCameraAccess CreateCameraAccess()
-        {
-            // Configure the component while its GameObject is inactive so the settings are in place before it starts.
-            var host = new GameObject($"[{nameof(SpatialSyncManager)}] PassthroughCameraAccess");
-            host.SetActive(false);
-            host.transform.SetParent(transform, false);
-
-            var access = host.AddComponent<PassthroughCameraAccess>();
-            access.CameraPosition = PassthroughCameraAccess.CameraPositionType.Left;
-            access.RequestedResolution = _requestedResolution;
-
-            host.SetActive(true);
-            return access;
+            IsInitialized = true;
+            yield break;
         }
 
         #endregion Initialization
@@ -209,10 +133,37 @@ namespace Client.Scene.Manager
             {
                 HandleIncomingMessage(syncResponseDTO);
             }
+
+            UpdateSharedSceneBlend();
         }
 
         /// <summary>
-        /// Every <see cref="_tickInterval"/> seconds, extract a key frame and send it to the server.
+        /// Moves the shared scene towards the latest alignment from the server: the position is interpolated and the rotation is
+        /// slerped, eased in and out, over <see cref="AlignmentBlendSeconds"/>.
+        /// </summary>
+        private void UpdateSharedSceneBlend()
+        {
+            if (!_isBlending || _sharedScene == null)
+            {
+                return;
+            }
+
+            _blendElapsed += Time.deltaTime;
+            float t = Mathf.Clamp01(_blendElapsed / AlignmentBlendSeconds);
+            float eased = Mathf.SmoothStep(0f, 1f, t);
+
+            _sharedScene.transform.SetPositionAndRotation(
+                Vector3.Lerp(_blendStartPosition, _blendTargetPosition, eased),
+                Quaternion.Slerp(_blendStartRotation, _blendTargetRotation, eased));
+
+            if (t >= 1f)
+            {
+                _isBlending = false;
+            }
+        }
+
+        /// <summary>
+        /// Every <see cref="_tickInterval"/> seconds, send an anchor key frame to the server.
         /// </summary>
         private IEnumerator SendKeyFrameLoop()
         {
@@ -241,7 +192,7 @@ namespace Client.Scene.Manager
         }
 
         /// <summary>
-        /// Extract one key frame and send it, unless the camera/connection isn't ready or the previous one is still in flight.
+        /// Build the anchor key frame (the headset pose and its scene anchors) and send it, unless the connection isn't ready or the previous one is still in flight.
         /// </summary>
         private void TrySendKeyFrame()
         {
@@ -251,18 +202,20 @@ namespace Client.Scene.Manager
                 return;
             }
 
-            if (!IsCameraReady || !ConnectionManager.Instance.IsConnected[ConnectionType.SpatialSync])
+            if (_anchorManager == null || !ConnectionManager.Instance.IsConnected[ConnectionType.SpatialSync])
             {
                 return;
             }
 
-            KeyFrameDTO keyFrame = ExtractKeyFrame(); // Must run on the main thread (camera access)
+            KeyFrameAnchorDTO keyFrame = _anchorManager.BuildKeyFrame(_keyFrameID + 1);
             if (keyFrame == null)
             {
                 return;
             }
 
-            // Serialize and send on a thread-pool thread so the JSON/base64 work doesn't stall the render loop.
+            _keyFrameID++;
+
+            // Serialize and send on a thread-pool thread so the JSON work doesn't stall the render loop.
             long keyFrameID = keyFrame.ID;
             _pendingSend = Task.Run(() => ConnectionManager.Instance.SendDTO(ConnectionType.SpatialSync, keyFrame));
             _pendingSend.ContinueWith(t =>
@@ -276,117 +229,6 @@ namespace Client.Scene.Manager
         }
 
         #endregion Update Loop
-
-        #region Key Frame Methods
-
-        /// <summary>
-        /// Capture the current passthrough camera image together with the pose of the camera that took it, and give it
-        /// the next key frame ID. Must be called on the main thread. Returns null (and consumes no ID) if the camera is
-        /// not ready or a new camera image arrived while capturing, in which case the pose might not match the pixels.
-        /// </summary>
-        public KeyFrameDTO ExtractKeyFrame()
-        {
-            if (!IsCameraReady)
-            {
-                Debug.LogWarning($"[{nameof(SpatialSyncManager)}] Passthrough camera is not ready; no key frame extracted.");
-                return null;
-            }
-
-            PassthroughCameraAccess camera = _cameraAccess;
-
-            // Read pose and pixels back to back on the main thread, then check the image did not change in between.
-            DateTime timestamp = camera.Timestamp;
-            Pose cameraPose = camera.GetCameraPose();
-            NativeArray<Color32> colors = camera.GetColors(); // owned by the camera: copy it now, never cache or dispose it
-            Vector2Int size = camera.CurrentResolution;
-
-            if (!colors.IsCreated || colors.Length != size.x * size.y)
-            {
-                Debug.LogWarning($"[{nameof(SpatialSyncManager)}] Unexpected camera buffer ({colors.Length} pixels for {size.x}x{size.y}); no key frame extracted.");
-                return null;
-            }
-
-            byte[] gray = ToGrayscale(colors);
-
-            if (camera.Timestamp != timestamp)
-            {
-                Debug.LogWarning($"[{nameof(SpatialSyncManager)}] Camera image changed while capturing; no key frame extracted.");
-                return null;
-            }
-
-            byte[] imageData = EncodeImage(gray, size.x, size.y);
-            if (imageData == null || imageData.Length == 0)
-            {
-                Debug.LogWarning($"[{nameof(SpatialSyncManager)}] Failed to encode the key frame image as {_imageFormat}; no key frame extracted.");
-                return null;
-            }
-
-            _keyFrameID++;
-            PassthroughCameraAccess.CameraIntrinsics cameraIntrinsics = _cameraAccess.Intrinsics;
-
-            var keyFrame = new KeyFrameDTO
-            {
-                ID = _keyFrameID,
-                CameraLocalPose = Conversions.ToSharedPose(cameraPose),
-                CameraIntrinsics = Conversions.ToSharedCameraIntrinsics(cameraIntrinsics),
-                Timestamp = timestamp,
-                Width = size.x,
-                Height = size.y,
-                ImageFormat = _imageFormat,
-                ImageData = imageData,
-            };
-
-            if (_debugSaveKeyFramePng)
-            {
-                DebugSaveImage(keyFrame);
-            }
-
-            return keyFrame;
-        }
-
-        /// <summary>
-        /// ORB only needs intensity, so convert to 8-bit luma (4x smaller than RGBA). Pixel order is left exactly as the
-        /// camera delivers it (Unity image order, bottom row first), which is the order the image encoder expects.
-        /// </summary>
-        private static byte[] ToGrayscale(NativeArray<Color32> colors)
-        {
-            var gray = new byte[colors.Length];
-            for (int i = 0; i < gray.Length; i++)
-            {
-                Color32 c = colors[i];
-                gray[i] = (byte)((c.r * 77 + c.g * 150 + c.b * 29) >> 8);
-            }
-
-            return gray;
-        }
-
-        /// <summary>
-        /// Compress the grayscale pixels to a JPEG or PNG file. Single-channel R8 data is written as an 8-bit grayscale
-        /// image. The encoder reads rows bottom-first (Unity's convention) and writes the file upright, so the result
-        /// decodes with row 0 at the top. Unity requires this to run on the main thread.
-        /// </summary>
-        private byte[] EncodeImage(byte[] gray, int width, int height)
-        {
-            if (_imageFormat == KeyFrameImageFormat.Png)
-            {
-                return ImageConversion.EncodeArrayToPNG(gray, GraphicsFormat.R8_UNorm, (uint)width, (uint)height);
-            }
-
-            return ImageConversion.EncodeArrayToJPG(gray, GraphicsFormat.R8_UNorm, (uint)width, (uint)height, 0, _jpegQuality);
-        }
-
-        /// <summary>
-        /// Save the exact compressed image that is sent to the server, so you can open it and check it is upright.
-        /// </summary>
-        private void DebugSaveImage(KeyFrameDTO keyFrame)
-        {
-            string extension = keyFrame.ImageFormat == KeyFrameImageFormat.Png ? "png" : "jpg";
-            string path = Path.Combine(Application.persistentDataPath, $"keyframe_{keyFrame.ID}.{extension}");
-            File.WriteAllBytes(path, keyFrame.ImageData);
-            Debug.Log($"[{nameof(SpatialSyncManager)}] Saved key frame {keyFrame.ID} ({keyFrame.ImageData.Length / 1024} KB) to {path}");
-        }
-
-        #endregion Key Frame Methods
 
         #region Handle Incoming Events
 
@@ -408,7 +250,7 @@ namespace Client.Scene.Manager
         /// <param name="dto">The begin spatial sync DTO from the server.</param>
         void OnBeginSpatialSyncDTOReceived(BeginSpatialSyncDTO dto)
         {
-            StartCoroutine(BeginSpatialSync());
+            MainThreadDispatcher.Enqueue(() => StartCoroutine(BeginSpatialSync()));
         }
 
         IEnumerator BeginSpatialSync()
@@ -476,8 +318,8 @@ namespace Client.Scene.Manager
                 return;
             }
 
-            // L: where this headset's camera was in its own tracking space when the key frame was taken.
-            // G: where the server says that same camera was in the global frame.
+            // L: where this headset was in its own tracking space when the key frame was taken.
+            // G: where the server says that same pose is in the global frame.
             Pose localPose = Conversions.ToUnityPose(response.CameraLocalPose);
             Pose globalPose = Conversions.ToUnityPose(response.GlobalPose.Value);
 
@@ -486,7 +328,23 @@ namespace Client.Scene.Manager
             Quaternion rotation = localPose.rotation * Quaternion.Inverse(globalPose.rotation);
             Vector3 position = localPose.position - rotation * globalPose.position;
 
-            _sharedScene.transform.SetPositionAndRotation(position, rotation);
+            // The first global pose puts the scene in place at once. Every later one is a correction of that alignment, so the
+            // scene slerps to it over time instead of jumping. A response that arrives mid-blend starts a new blend from wherever
+            // the scene is right now.
+            if (!_hasAppliedGlobalPose || AlignmentBlendSeconds <= 0f)
+            {
+                _sharedScene.transform.SetPositionAndRotation(position, rotation);
+                _hasAppliedGlobalPose = true;
+                _isBlending = false;
+                return;
+            }
+
+            _blendStartPosition = _sharedScene.transform.position;
+            _blendStartRotation = _sharedScene.transform.rotation;
+            _blendTargetPosition = position;
+            _blendTargetRotation = rotation;
+            _blendElapsed = 0f;
+            _isBlending = true;
         }
 
         #endregion Handle Incoming Events

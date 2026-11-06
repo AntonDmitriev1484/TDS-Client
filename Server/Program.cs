@@ -33,10 +33,14 @@ namespace Server
             string debugModeStr = builder.Configuration["WebServer:Debug"] ?? "false";
             bool debugMode = debugModeStr == "True" || debugModeStr == "true";
 
+            string minPlayersStr = builder.Configuration["WebServer:MinPlayersPerSession"] ?? "2";
+            int minPlayersPerSession = int.Parse(minPlayersStr);
+
             builder.Services.AddSingleton(new ServerSettings
             {
                 URL = webServerUrl,
-                DebugMode = debugMode
+                DebugMode = debugMode,
+                MinPlayersPerSession = minPlayersPerSession,
             });
 
 

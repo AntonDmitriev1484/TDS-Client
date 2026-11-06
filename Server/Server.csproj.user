@@ -3,4 +3,12 @@
   <PropertyGroup>
     <ActiveDebugProfile>https</ActiveDebugProfile>
   </PropertyGroup>
+  <ItemGroup>
+    <Compile Update="Archived\Utilities\PointCloudView.cs">
+      <SubType>Component</SubType>
+    </Compile>
+    <Compile Update="Utilities\SceneMapView.cs">
+      <SubType>Component</SubType>
+    </Compile>
+  </ItemGroup>
 </Project>

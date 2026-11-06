@@ -1,9 +1,9 @@
-﻿using Server.Manager.SpatialSync;
+﻿using Server.Archived.Manager.SpatialSync;
 using System.Drawing.Drawing2D;
 using System.Drawing.Text;
 using System.Numerics;
 
-namespace Server.Utilities
+namespace Server.Archived.Utilities
 {
     /// <summary>Draws a top-down view of the global map for the debug window.</summary>
     internal static class GlobalMapRenderer

@@ -115,12 +115,6 @@ namespace Client.Scene.Manager
             }
         }
 
-        void OnEnable()
-        {
-            _cubeManager.PinchStarted += OnPinchStarted;
-            _cubeManager.PinchEnded += OnPinchEnded;
-        }
-
         void OnDisable()
         {
             _cubeManager.PinchStarted -= OnPinchStarted;
@@ -174,6 +168,8 @@ namespace Client.Scene.Manager
             if (ConnectionManager.Instance.InboundMessagesDict.TryGetValue(typeof(SingleActionDTO), out var saEvent))
                 ((UnityEvent<SingleActionDTO>)saEvent).AddListener(OnSingleActionDTOReceived);
 
+            _cubeManager.PinchStarted += OnPinchStarted;
+            _cubeManager.PinchEnded += OnPinchEnded;
 
             IsInitialized = true;
         }
@@ -220,6 +216,9 @@ namespace Client.Scene.Manager
 
         void LateUpdate()
         {
+            if (!IsInitialized)
+                return;
+
             SendHeldCubePoses();
         }
 
@@ -432,7 +431,7 @@ namespace Client.Scene.Manager
             // Set the position if our player isn't holding the cube.
             if (cubeState.HolderPlayerID != LocalPlayerID)
             {
-                cube.transform.SetPositionAndRotation(Conversions.ToUnityPosition(cubeState.Pose), Conversions.ToUnityRotation(cubeState.Pose));
+                cube.transform.SetLocalPositionAndRotation(Conversions.ToUnityPosition(cubeState.Pose), Conversions.ToUnityRotation(cubeState.Pose));
             }
         }
 

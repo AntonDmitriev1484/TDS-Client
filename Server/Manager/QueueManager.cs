@@ -23,17 +23,18 @@ namespace Server.Manager
         /// </summary>
         public int GlobalMapTimeoutSeconds { get; set; } = 180;
 
-        /// <summary>A game needs at least this many players left in the spatial synchronization session once the global map has formed.</summary>
-        private const int MinPlayersToStartGame = 2;
+        /// <summary>The minimum number of players required to start a game session.</summary>
+        private int MinPlayersPerSession;
 
         // 1 while a matched group is waiting for its global map. There is no game yet during that time, so without this flag the queue
         // would treat players that queue meanwhile as the start of another match.
         private int _matchInProgress;
 
 
-        public QueueManager(IServiceScopeFactory scopeFactory)
+        public QueueManager(IServiceScopeFactory scopeFactory, ServerSettings serverSettings)
         {
             _scopeFactory = scopeFactory;
+            MinPlayersPerSession = serverSettings.MinPlayersPerSession;
 
             _queue = new ConcurrentDictionary<int, bool>();
 
@@ -89,6 +90,8 @@ namespace Server.Manager
             {
                 List<int> playersToMatch = _queue.Keys.ToList();
 
+                Console.WriteLine("Players to match: " + string.Join(", ", playersToMatch));
+
                 // While a matched group is still waiting for its global map there is no game yet, so players queued now would look like
                 // the start of another match. They stay in the queue until that match is done, and then join its game.
                 if (playersToMatch.Count > 0 && Volatile.Read(ref _matchInProgress) == 0)
@@ -130,7 +133,7 @@ namespace Server.Manager
                     // Otherwise, a new game needs at least two players: start their spatial synchronization and create the game once the
                     // global map has formed. This is not added to `tasks`, because waiting for the global map can take minutes and must not
                     // hold up the queue.
-                    if (firstGameInstanceID == null && playersToMatch.Count > 1 && Interlocked.CompareExchange(ref _matchInProgress, 1, 0) == 0)
+                    if (firstGameInstanceID == null && playersToMatch.Count >= MinPlayersPerSession && Interlocked.CompareExchange(ref _matchInProgress, 1, 0) == 0)
                     {
                         _ = RunMatchAsync(playersToMatch);
                     }
@@ -267,7 +270,7 @@ namespace Server.Manager
                 lock (spatialSyncManager.PlayerIDs)
                     playersLeft = spatialSyncManager.PlayerIDs.Count;
 
-                if (playersLeft < MinPlayersToStartGame)
+                if (playersLeft < MinPlayersPerSession)
                 {
                     Console.Error.WriteLine($"Only {playersLeft} player(s) are left in spatial synchronization session {sessionID}; giving up on its global map.");
                     return null;

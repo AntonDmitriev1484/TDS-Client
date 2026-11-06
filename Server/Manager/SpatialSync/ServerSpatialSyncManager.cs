@@ -1,4 +1,5 @@
 ﻿using Server.Handler;
+using Server.Utilities;
 using SharedLibrary.Communication.DataTransferObjects.SpatialSync;
 using System.Collections.Concurrent;
 
@@ -11,7 +12,7 @@ namespace Server.Manager.SpatialSync
 
         public int ID { get; set; }
         public List<int> PlayerIDs { get; set; }
-        private ConcurrentDictionary<int, KeyFrameDTO> _latestKeyFrame { get; set; }
+        private ConcurrentDictionary<int, KeyFrameAnchorDTO> _latestKeyFrame { get; set; }
 
         /// <summary>
         /// How long a player may go without sending a key frame, after they have sent their first one, before they are disconnected.
@@ -55,6 +56,9 @@ namespace Server.Manager.SpatialSync
         public float TickInterval => _tickInterval;
 
         private readonly IServiceScopeFactory _scopeFactory;
+
+        /// <summary>Debug mode: 3D windows of the scene anchor sub-maps and of the merged global map.</summary>
+        private SceneMapViewer? _sceneMapViewer;
         // Cancellation and task for the spatial synchronization loop.
         private CancellationTokenSource? _spatialSyncCts;
         private Task? _spatialSyncTask;
@@ -74,12 +78,15 @@ namespace Server.Manager.SpatialSync
         {
             _scopeFactory = scopeFactory;
             PlayerIDs = playerIDs;
-            _latestKeyFrame = new ConcurrentDictionary<int, KeyFrameDTO>();
+            _latestKeyFrame = new ConcurrentDictionary<int, KeyFrameAnchorDTO>();
             GlobalMappingManager = new GlobalMappingManager(serverSettings.DebugMode)
             {
-                // The global map is formed once all of this session's players have been merged into one shared map.
+                // The global map is formed once all of this session's players have been placed in it by matching the scene anchors of their room scans.
                 ExpectedPlayerIDs = GetPlayerIDsSnapshot,
             };
+
+            if (serverSettings.DebugMode)
+                _sceneMapViewer = new SceneMapViewer(GlobalMappingManager);
 
             StartSpatialSync();
         }
@@ -128,27 +135,22 @@ namespace Server.Manager.SpatialSync
         }
 
         /// <summary>
-        /// A player joined (or rejoined): send them the whole game state if the game has started.
-        /// </summary>
-        public void OnPlayerConnected(int playerID)
-        {
-
-        }
-
-        /// <summary>
         /// A player dropped: free every cube they were holding so others can grab it.
         /// </summary>
         public void OnPlayerDisconnected(int playerID)
         {
             lock (PlayerIDs)
                 this.PlayerIDs.Remove(playerID);
+
+            // Only this player leaves the global map. The anchors in it stay, so the others (and this player if they rejoin) keep the same global frame.
+            GlobalMappingManager.RemovePlayer(playerID);
         }
 
         #endregion Players
 
         #region Process DTOs
 
-        public void EnqueueKeyFrame(int playerID, KeyFrameDTO keyFrameDTO)
+        public void EnqueueKeyFrame(int playerID, KeyFrameAnchorDTO keyFrameDTO)
         {
             // Any key frame counts as a sign of life for the timeout.
             PlayerActivity activity = _playerActivity.GetOrAdd(playerID, _ => new PlayerActivity());
@@ -180,7 +182,7 @@ namespace Server.Manager.SpatialSync
                     if (!_latestKeyFrame.IsEmpty)
                     {
                         // First: drain per-object queues into temporary lists so new incoming messages are not processed this tick.
-                        var latestKeyframeSnapshot = new List<KeyValuePair<int, KeyFrameDTO>>();
+                        var latestKeyframeSnapshot = new List<KeyValuePair<int, KeyFrameAnchorDTO>>();
 
                         foreach (var kvp in _latestKeyFrame.ToDictionary())
                         {
@@ -192,17 +194,23 @@ namespace Server.Manager.SpatialSync
                         foreach (var pair in latestKeyframeSnapshot)
                         {
                             int playerID = pair.Key;
-                            KeyFrameDTO keyFrameDTO = pair.Value;
+                            KeyFrameAnchorDTO keyFrameDTO = pair.Value;
+
+                            // A key frame that was already queued when the player left must not start a new sub-map for them.
+                            if (!GetPlayerIDsSnapshot().Contains(playerID))
+                                continue;
 
                             try
                             {
-                                // Add to global map; this returns the key frame's global pose once the global map is formed.
+                                // Take the player's spatial anchor poses into the global map; this returns the global pose of the pose they sent
+                                // (null until the player is placed in the global map).
                                 SharedLibrary.Game.Actions.Pose? globalPose = GlobalMappingManager.HandleNewKeyFrame(playerID, keyFrameDTO);
+                                SharedLibrary.Game.Actions.Pose cameraLocalPose = keyFrameDTO.CameraLocalPose;
 
                                 // Tell the player: with the global pose if the global map is ready for them, without it if not.
                                 SyncResponseDTO syncResponseDTO = globalPose.HasValue
-                                    ? new SyncResponseDTO(keyFrameDTO.ID, keyFrameDTO.CameraLocalPose, globalPose.Value)
-                                    : new SyncResponseDTO(keyFrameDTO.ID, keyFrameDTO.CameraLocalPose);
+                                    ? new SyncResponseDTO(keyFrameDTO.ID, cameraLocalPose, globalPose.Value)
+                                    : new SyncResponseDTO(keyFrameDTO.ID, cameraLocalPose);
                                 _ = AddOutgoingDTO(playerID, syncResponseDTO);
                             }
                             catch (Exception ex)
@@ -247,6 +255,8 @@ namespace Server.Manager.SpatialSync
                 _spatialSyncCts.Dispose();
                 _spatialSyncCts = null;
                 _spatialSyncTask = null;
+                _sceneMapViewer?.Dispose();
+                _sceneMapViewer = null;
             }
         }
 

@@ -196,7 +196,6 @@ namespace Server.Manager.Game
         {
             if (_gameInstances.IsEmpty)
             {
-                Console.WriteLine("No game instances found.");
                 return null;
             }
             return _gameInstances.Keys.First();
