@@ -25,6 +25,49 @@ namespace Server.Manager
         // Empty space between the two starting cubes (meters).
         float _cubeGap = 0.25f;
 
+        // Edge length of the cubes that spawn on the board (meters).
+        float _cubeSize = CubeState.DefaultCubeSize;
+        // Board width (x), thickness (y) and depth (z) (meters).
+        Vector3 _boardSize = new Vector3(0.75f, 0.1f, 0.75f);
+        // Cubes spawn on one cell of a grid this many cells wide and deep.
+        int _gridSize = 8;
+        // How far in front of player 1's origin the board's center is (meters).
+        float _boardForwardOffset = 0.5f;
+        // How far below player 1's origin the board's center is (meters).
+        float _boardDownOffset = 0.5f;
+        // Edge length of each player's goal cube (meters).
+        float _goalSize = 0.5f;
+        // How far above each player's origin their goal's center is (meters).
+        float _goalHeightAboveHead = 0.5f;
+        // Seconds a cube must stay inside a goal to score.
+        float _timeInGoalToScore = 0.5f;
+        // The game ends once the round passes this number.
+        int _maxRounds = 12;
+
+        // The server can't see the players' heads, so player 1's origin is the world origin, facing +Z.
+        static readonly Vector3 Player1Origin = Vector3.Zero;
+        static readonly Vector3 Player1Forward = new Vector3(0f, 0f, 1f);
+
+        // Goals exist for both players.
+        const int Player1ID = 1;
+        const int Player2ID = 2;
+
+        static readonly RGBAColor BoardColor = new RGBAColor(0.5f, 0.5f, 0.5f);
+        static readonly RGBAColor Player1GoalColor = new RGBAColor(1f, 0f, 0f, 0.3f);
+        static readonly RGBAColor Player2GoalColor = new RGBAColor(0f, 0f, 1f, 0.3f);
+        static readonly RGBAColor GameOverGoalColor = new RGBAColor(0f, 1f, 0f, 0.3f);
+
+        // Facing +Z, and turned 180 degrees about Y to face back across the board.
+        static readonly Quaternion Player1Rotation = Quaternion.Identity;
+        static readonly Quaternion Player2Rotation = new Quaternion(0f, 1f, 0f, 0f);
+
+        readonly Random _random = new Random();
+        int _nextCubeID;
+        bool _gameOver;
+
+        // Cube ID -> the goal it is inside and the server time it entered.
+        readonly Dictionary<string, (int PlayerID, double EnterTime)> _cubesInGoals = new Dictionary<string, (int, double)>();
+
         // Tick rate (updates per second) and corresponding interval (seconds per update).
         private float _tickRate = 30;
         private float _tickInterval = 1.0f / 30;
@@ -127,9 +170,26 @@ namespace Server.Manager
             ServerTime = TimeUtilities.GetTime();
             double serverStartTime = ServerTime;
             var cubes = new List<CubeState>();
-            Pose[] startingPoses = GetStartingCubePoses();
-            for (int i = 0; i < startingPoses.Length; i++)
-                cubes.Add(new CubeState($"cube-{i}", serverStartTime, serverStartTime, startingPoses[i], playerIDs));
+            // Replaced by a single cube on the board.
+            // Pose[] startingPoses = GetStartingCubePoses();
+            // for (int i = 0; i < startingPoses.Length; i++)
+            //     cubes.Add(new CubeState($"cube-{i}", serverStartTime, serverStartTime, startingPoses[i], playerIDs));
+
+            Vector3 boardCenter = Player1Origin + Player1Forward * _boardForwardOffset + new Vector3(0f, -_boardDownOffset, 0f);
+            var board = new BoardState(BoardColor, new Pose(boardCenter, Player1Rotation), _gridSize, _boardSize);
+
+            // Player 2 is mirrored across the board from player 1: as far beyond it, facing back.
+            Vector3 player2Origin = Player1Origin + Player1Forward * (2f * _boardForwardOffset);
+            Vector3 aboveHead = new Vector3(0f, _goalHeightAboveHead, 0f);
+            var goals = new[]
+            {
+                new GoalCubeState(Player1ID, Player1GoalColor, new Pose(Player1Origin + aboveHead, Player1Rotation), _goalSize),
+                new GoalCubeState(Player2ID, Player2GoalColor, new Pose(player2Origin + aboveHead, Player2Rotation), _goalSize),
+            };
+
+            _nextCubeID = 0;
+            _gameOver = false;
+            _cubesInGoals.Clear();
 
             GameState = new GameState(isAuthoritative: true);
             PlayerLogicalTimestamps = new Dictionary<int, long>();
@@ -139,9 +199,22 @@ namespace Server.Manager
             }
 
 
-            GameState.ServerInitialize(playerIDs, cubes);
+            GameState.ServerInitialize(playerIDs, cubes, board, goals);
+            GameState.ServerAddCube(CreateCubeOnBoard());
 
             BroadcastGameState();
+        }
+
+        /// <summary>
+        /// A new cube with the next ID on a random cell of the board's grid.
+        /// </summary>
+        CubeState CreateCubeOnBoard()
+        {
+            BoardState board = GameState.Board;
+            var gridLocation = (X: _random.Next(board.GridSize), Z: _random.Next(board.GridSize));
+            var pose = new Pose(board.GridToPosition(gridLocation.X, gridLocation.Z, _cubeSize), board.Pose.Rotation);
+
+            return new CubeState($"cube-{_nextCubeID++}", ServerTime, ServerTime, pose, GameState.PlayerIDs, gridLocation, _cubeSize);
         }
 
         /// <summary>Two cubes side by side, <see cref="_spawnDistance"/> in the middle of all users.</summary>
@@ -190,6 +263,9 @@ namespace Server.Manager
         /// </summary>
         public void OnPlayerConnected(int playerID)
         {
+            if (PlayerLogicalTimestamps != null && !PlayerLogicalTimestamps.ContainsKey(playerID))
+                PlayerLogicalTimestamps.Add(playerID, 0);
+
             if (GameState != null)
                 this.AddOutgoingDTO(playerID, new GameStateDTO(ServerTime, PlayerLogicalTimestamps, GameState));
         }
@@ -267,7 +343,8 @@ namespace Server.Manager
                             bool successfulAction = GameState.HandleSingleAction(queuedAction.Action);
 
                             // TODO: handle action failures, logging, and generating per-player responses or broadcasts.
-                            if (PlayerLogicalTimestamps[queuedAction.PlayerID] < queuedAction.ClientLogicalTimestamp)
+                            // Acknowledge the action whether or not it is accepted, so the client stops replaying it.
+                            if (PlayerLogicalTimestamps.TryGetValue(queuedAction.PlayerID, out long latest) && latest < queuedAction.ClientLogicalTimestamp)
                             {
                                 PlayerLogicalTimestamps[queuedAction.PlayerID] = queuedAction.ClientLogicalTimestamp;
                             }
@@ -279,10 +356,15 @@ namespace Server.Manager
                         }
                     }
 
-                    // TODO: Run per-tick authoritative updates here (physics, AI, etc.)
-
                     // Update the game state server time.
                     ServerTime = TimeUtilities.GetTime();
+
+                    // Per-tick authoritative updates.
+                    if (!_gameOver)
+                    {
+                        CubeTimeInGoal();
+                        RoundTracker();
+                    }
 
                     // Broadcast the updated state to all players
                     BroadcastGameState();
@@ -324,6 +406,91 @@ namespace Server.Manager
         }
 
         #endregion Process DTOs
+
+        #region Automatic Functions
+
+        /// <summary>
+        /// Scores for a goal's player once a cube has stayed inside that goal for
+        /// <see cref="_timeInGoalToScore"/> seconds. Leaving the goal resets the timer.
+        /// </summary>
+        void CubeTimeInGoal()
+        {
+            // HandleScore swaps cubes, so iterate over a copy.
+            foreach (CubeState cube in GameState.Cubes.Values.ToList())
+            {
+                int? goalPlayerID = FindGoalContaining(cube);
+                if (goalPlayerID == null)
+                {
+                    _cubesInGoals.Remove(cube.ID);
+                    continue;
+                }
+
+                if (!_cubesInGoals.TryGetValue(cube.ID, out var entry) || entry.PlayerID != goalPlayerID)
+                {
+                    _cubesInGoals[cube.ID] = (goalPlayerID.Value, ServerTime);
+                    continue;
+                }
+
+                if (ServerTime - entry.EnterTime >= _timeInGoalToScore)
+                {
+                    _cubesInGoals.Remove(cube.ID);
+                    HandleScore(new ScoreAction(goalPlayerID.Value, ServerTime, cube.ID));
+                }
+            }
+        }
+
+        /// <summary>The player ID of the goal the cube's center is inside, or null.</summary>
+        int? FindGoalContaining(CubeState cube)
+        {
+            foreach (GoalCubeState goal in GameState.Goals.Values)
+            {
+                if (goal.Contains(cube.Pose.Position))
+                    return goal.PlayerID;
+            }
+
+            return null;
+        }
+
+        /// <summary>
+        /// Gives the action's player a point, advances the round, and replaces the scored cube with a new
+        /// one on a random cell of the board. The state sync loop broadcasts the result.
+        /// </summary>
+        /// <returns>True if the cube was in the game.</returns>
+        public bool HandleScore(ScoreAction scoreAction)
+        {
+            if (!GameState.ServerRemoveCube(scoreAction.CubeID))
+                return false;
+
+            GameState.Scores.TryGetValue(scoreAction.PlayerID, out int score);
+            GameState.Scores[scoreAction.PlayerID] = score + 1;
+            GameState.Round++;
+
+            CubeState newCube = CreateCubeOnBoard();
+            GameState.ServerAddCube(newCube);
+
+            Console.WriteLine($"Player {scoreAction.PlayerID} scored with {scoreAction.CubeID} " +
+                $"(score {GameState.Scores[scoreAction.PlayerID]}); round {GameState.Round}, spawned {newCube.ID} at grid {newCube.GridLocation}.");
+
+            return true;
+        }
+
+        /// <summary>
+        /// Ends the game once the round passes <see cref="_maxRounds"/>: both goals turn green and
+        /// scoring stops. The state sync loop broadcasts the result.
+        /// </summary>
+        void RoundTracker()
+        {
+            if (GameState.Round <= _maxRounds)
+                return;
+
+            _gameOver = true;
+            foreach (GoalCubeState goal in GameState.Goals.Values)
+                goal.Color = GameOverGoalColor;
+
+            Console.WriteLine($"Game {ID} over after round {_maxRounds}.");
+        }
+
+        #endregion Automatic Functions
 
         #region Send Messages
 

@@ -54,10 +54,10 @@ public class OfflineGameStateManager : MonoBehaviour
     [Tooltip("Cubes spawn on one cell of a grid this many cells wide and deep.")]
     [SerializeField] int _gridSize = 8;
 
-    [Tooltip("How far in front of player 0's head the board's center is (meters).")]
+    [Tooltip("How far in front of player 1's head the board's center is (meters).")]
     [SerializeField] float _boardForwardOffset = 0.5f;
 
-    [Tooltip("How far below player 0's head the board's center is (meters).")]
+    [Tooltip("How far below player 1's head the board's center is (meters).")]
     [SerializeField] float _boardDownOffset = 0.5f;
 
     [Tooltip("Edge length of each player's goal cube (meters).")]
@@ -73,12 +73,12 @@ public class OfflineGameStateManager : MonoBehaviour
     [SerializeField] int _maxRounds = 12;
 
     // Goals exist for both players, even offline where only the local headset plays.
-    const int Player0ID = 0;
     const int Player1ID = 1;
+    const int Player2ID = 2;
 
     static readonly RGBAColor BoardColor = new RGBAColor(0.5f, 0.5f, 0.5f);
-    static readonly RGBAColor Player0GoalColor = new RGBAColor(1f, 0f, 0f, 0.3f);
-    static readonly RGBAColor Player1GoalColor = new RGBAColor(0f, 0f, 1f, 0.3f);
+    static readonly RGBAColor Player1GoalColor = new RGBAColor(1f, 0f, 0f, 0.3f);
+    static readonly RGBAColor Player2GoalColor = new RGBAColor(0f, 0f, 1f, 0.3f);
     static readonly RGBAColor GameOverGoalColor = new RGBAColor(0f, 1f, 0f, 0.3f);
 
     // Tick rate (updates per second) and corresponding interval (seconds per update).
@@ -222,12 +222,12 @@ public class OfflineGameStateManager : MonoBehaviour
         Vector3 boardCenter = head.position + forward * _boardForwardOffset + Vector3.down * _boardDownOffset;
         var board = new BoardState(BoardColor, Conversions.ToSharedPose(boardCenter, rotation), _gridSize, Conversions.ToSharedPosition(_boardSize));
 
-        // Player 1 is mirrored across the board from player 0: as far beyond it, facing back.
-        Vector3 player1Head = head.position + forward * (2f * _boardForwardOffset);
+        // Player 2 is mirrored across the board from player 1: as far beyond it, facing back.
+        Vector3 player2Head = head.position + forward * (2f * _boardForwardOffset);
         var goals = new[]
         {
-            new GoalCubeState(Player0ID, Player0GoalColor, Conversions.ToSharedPose(head.position + Vector3.up * _goalHeightAboveHead, rotation), _goalSize),
-            new GoalCubeState(Player1ID, Player1GoalColor, Conversions.ToSharedPose(player1Head + Vector3.up * _goalHeightAboveHead, Quaternion.LookRotation(-forward)), _goalSize),
+            new GoalCubeState(Player1ID, Player1GoalColor, Conversions.ToSharedPose(head.position + Vector3.up * _goalHeightAboveHead, rotation), _goalSize),
+            new GoalCubeState(Player2ID, Player2GoalColor, Conversions.ToSharedPose(player2Head + Vector3.up * _goalHeightAboveHead, Quaternion.LookRotation(-forward)), _goalSize),
         };
 
         _nextCubeID = 0;
@@ -298,7 +298,7 @@ public class OfflineGameStateManager : MonoBehaviour
         if (_clientGameStateManager != null && _clientGameStateManager.LocalPlayerID >= 0)
             return new[] { _clientGameStateManager.LocalPlayerID };
 
-        return new[] { 0 };
+        return new[] { 1 };
     }
 
     public bool IsPlayer(int playerID)

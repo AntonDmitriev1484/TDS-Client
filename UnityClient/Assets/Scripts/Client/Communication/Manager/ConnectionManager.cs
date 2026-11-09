@@ -139,10 +139,10 @@ namespace Client.Communication.Manager
 
             if (IsLocalTest)
             {
-                // No server to log in to: the offline game's only player is player 0.
-                PlayerID = 0;
+                // No server to log in to: the offline game's only player is player 1.
+                PlayerID = 1;
                 IsInitialized = true;
-                Debug.Log("Server Manager initialized in local test mode as player 0.");
+                Debug.Log("Server Manager initialized in local test mode as player 1.");
                 yield break;
             }
 

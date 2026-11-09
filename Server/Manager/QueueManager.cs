@@ -70,7 +70,10 @@ namespace Server.Manager
             List<int> playersToMatch = _queue.Keys.ToList();
 
 
-            if (playersToMatch.Count > 1)
+            // TEMPORARY: 1 for single-player testing; set back to 2 for normal play.
+            const int MinPlayersToStartGame = 1;
+
+            if (playersToMatch.Count >= MinPlayersToStartGame)
             {
                 // If a game instance already exists, add all players to that game instance.
                 int? firstInstanceID;
