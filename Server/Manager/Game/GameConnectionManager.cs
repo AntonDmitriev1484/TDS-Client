@@ -1,7 +1,7 @@
 ﻿using System.Collections.Concurrent;
 using System.Net.WebSockets;
 
-namespace Server.Manager
+namespace Server.Manager.Game
 {
     /// <summary>
     /// Holds connection information including references to connections for each player based on player ID.
@@ -10,9 +10,9 @@ namespace Server.Manager
     {
         private readonly ConcurrentDictionary<WebSocket, bool> _webSockets = new ConcurrentDictionary<WebSocket, bool>();
         // Map player ID -> IP address
-        private readonly ConcurrentDictionary<int, string> _playerIPById = new ConcurrentDictionary<int, string>();
+        private readonly ConcurrentDictionary<int, string> _playerIPByID = new ConcurrentDictionary<int, string>();
         // Reverse map IP address -> player ID
-        private readonly ConcurrentDictionary<string, int> _playerIdByIP = new ConcurrentDictionary<string, int>();
+        private readonly ConcurrentDictionary<string, int> _playerIDByIP = new ConcurrentDictionary<string, int>();
         private readonly ConcurrentDictionary<int, WebSocket> _webSocketsByPlayer = new ConcurrentDictionary<int, WebSocket>();
 
         /// <summary>
@@ -94,36 +94,36 @@ namespace Server.Manager
             }
 
             // If this IP is already registered, return existing ID
-            if (_playerIdByIP.TryGetValue(ipAddress, out var existingId))
+            if (_playerIDByIP.TryGetValue(ipAddress, out var existingID))
             {
-                return existingId;
+                return existingID;
             }
 
             int id = 1;
             while (true)
             {
                 // Try to reserve the id -> ip mapping
-                if (_playerIPById.TryAdd(id, ipAddress))
+                if (_playerIPByID.TryAdd(id, ipAddress))
                 {
                     // Now try to add the reverse mapping. If another thread added the
                     // same IP concurrently, clean up and return the existing id.
-                    if (_playerIdByIP.TryAdd(ipAddress, id))
+                    if (_playerIDByIP.TryAdd(ipAddress, id))
                     {
                         Console.WriteLine($"Registered new player {id} for IP {ipAddress}.");
                         return id;
                     }
 
                     // Reverse add failed: remove the forward mapping we just added
-                    _playerIPById.TryRemove(id, out _);
+                    _playerIPByID.TryRemove(id, out _);
 
                     // Return the id that was added by the concurrent caller
-                    if (_playerIdByIP.TryGetValue(ipAddress, out var concurrentId))
+                    if (_playerIDByIP.TryGetValue(ipAddress, out var concurrentID))
                     {
-                        return concurrentId;
+                        return concurrentID;
                     }
 
                     // If for some reason the reverse map still doesn't contain the IP,
-                    // continue and try next id.
+                    // continue and try next ID.
                 }
 
                 id++;
@@ -135,11 +135,11 @@ namespace Server.Manager
         /// </summary>
         /// <param name="playerID">The player ID to remove.</param>
         /// <returns>True if removal was successful, false otherwise.</returns>
-        public bool RemovePlayer(int playerID)
+        public bool RemovePlayerIPMappings(int playerID)
         {
-            if (_playerIPById.TryRemove(playerID, out var ip))
+            if (_playerIPByID.TryRemove(playerID, out var ip))
             {
-                _playerIdByIP.TryRemove(ip, out _);
+                _playerIDByIP.TryRemove(ip, out _);
                 return true;
             }
 

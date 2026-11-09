@@ -1,7 +1,7 @@
 using Assets.Scripts.Utilities;
 using Client.Communication.Manager;
 using SharedLibrary.Communication.Connection;
-using SharedLibrary.Communication.DataTransferObjects;
+using SharedLibrary.Communication.DataTransferObjects.Game;
 using SharedLibrary.Game;
 using SharedLibrary.Game.Actions;
 using SharedLibrary.Utilities;
@@ -30,6 +30,14 @@ namespace Client.Scene.Manager
     /// </summary>
     public class GameStateManager : MonoBehaviour
     {
+
+
+        #region Properties
+
+        public GameStateManager Instance { get; private set; }
+        public bool IsInitialized { get; private set; }
+
+
         [SerializeField] GrabbableCubeManager _cubeManager;
         [SerializeField] GameBoardView _boardView;
         [SerializeField] OVRHand _rightHand;
@@ -81,10 +89,53 @@ namespace Client.Scene.Manager
         /// </summary>
         public event Action<object> OnOutgoingDTO;
 
-        #region Unity Functions
+        #endregion Properties
 
+        #region Initialization
+
+
+        /// <summary>
+        /// Singleton for Spatial Synchronization Manager.
+        /// </summary>
         void Awake()
         {
+            if (Instance == null)
+            {
+                Instance = this;
+                DontDestroyOnLoad(gameObject);
+
+                // Set initial variables on spatial sync settings
+                IsInitialized = false;
+
+                // Wait for necessary objects before initializing spatial sync manager
+                StartCoroutine(WaitToInitialize());
+            }
+            else
+            {
+                Destroy(gameObject);
+            }
+        }
+
+        void OnDisable()
+        {
+            _cubeManager.PinchStarted -= OnPinchStarted;
+            _cubeManager.PinchEnded -= OnPinchEnded;
+        }
+
+        IEnumerator WaitToInitialize()
+        {
+            // Wait for ConnectionManager to finish initializing before subscribing to its events.
+            while (ConnectionManager.Instance == null || !ConnectionManager.Instance.IsInitialized)
+                yield return null;
+
+            Initialize();
+        }
+
+
+        /// <summary>Sets which player this client acts for. Call before the first game state arrives.</summary>
+        void Initialize()
+        {
+            LocalPlayerID = ConnectionManager.Instance.PlayerID;
             if (_cubeManager == null)
                 _cubeManager = GetComponent<GrabbableCubeManager>();
             if (_cubeManager == null)
@@ -117,45 +168,31 @@ namespace Client.Scene.Manager
             GameState.OnCubeRemoved += HandleCubeRemoved;
             GameState.OnGrabPermissionsChanged += FlagCubeStateChanged;
             GameState.OnCubePoseChanged += FlagCubeStateChanged;
-        }
 
-        void OnEnable()
-        {
+            if (ConnectionManager.Instance.InboundMessagesDict.TryGetValue(typeof(GameStateDTO), out var gsEvent))
+                ((UnityEvent<GameStateDTO>)gsEvent).AddListener(OnGameStateDTOReceived);
+            if (ConnectionManager.Instance.InboundMessagesDict.TryGetValue(typeof(SingleActionDTO), out var saEvent))
+                ((UnityEvent<SingleActionDTO>)saEvent).AddListener(OnSingleActionDTOReceived);
+
             _cubeManager.PinchStarted += OnPinchStarted;
             _cubeManager.PinchEnded += OnPinchEnded;
-        }
 
-        void OnDisable()
-        {
-            _cubeManager.PinchStarted -= OnPinchStarted;
-            _cubeManager.PinchEnded -= OnPinchEnded;
-        }
-
-        IEnumerator Start()
-        {
-            // Wait for ConnectionManager to finish initializing before subscribing to its events.
-            while (ConnectionManager.Instance == null || !ConnectionManager.Instance.IsInitialized)
-                yield return null;
-
-            var cm = ConnectionManager.Instance;
-            Initialize(cm.PlayerID);
-
-            if (cm.InboundMessagesDict.TryGetValue(typeof(GameStateDTO), out var gsEvent))
-                ((UnityEvent<GameStateDTO>)gsEvent).AddListener(OnGameStateDTOReceived);
-            if (cm.InboundMessagesDict.TryGetValue(typeof(SingleActionDTO), out var saEvent))
-                ((UnityEvent<SingleActionDTO>)saEvent).AddListener(OnSingleActionDTOReceived);
+            IsInitialized = true;
         }
 
         void OnDestroy()
         {
-            var cm = ConnectionManager.Instance;
-            if (cm == null || cm.InboundMessagesDict == null) return;
+            if (ConnectionManager.Instance == null || ConnectionManager.Instance.InboundMessagesDict == null) return;
 
-            if (cm.InboundMessagesDict.TryGetValue(typeof(GameStateDTO), out var gsEvent))
+            if (ConnectionManager.Instance.InboundMessagesDict.TryGetValue(typeof(GameStateDTO), out var gsEvent))
                 ((UnityEvent<GameStateDTO>)gsEvent).RemoveListener(OnGameStateDTOReceived);
-            if (cm.InboundMessagesDict.TryGetValue(typeof(SingleActionDTO), out var saEvent))
+            if (ConnectionManager.Instance.InboundMessagesDict.TryGetValue(typeof(SingleActionDTO), out var saEvent))
                 ((UnityEvent<SingleActionDTO>)saEvent).RemoveListener(OnSingleActionDTOReceived);
         }
+
+        #endregion Initialization
+
+        #region Update Loop
 
         void Update()
         {
@@ -185,46 +222,38 @@ namespace Client.Scene.Manager
 
         void LateUpdate()
         {
+            if (!IsInitialized)
+                return;
+
             SendHeldCubePoses();
         }
 
-        #endregion Unity Functions
 
-        /// <summary>Sets which player this client acts for. Call before the first game state arrives.</summary>
-        public void Initialize(int localPlayerID)
-        {
-            LocalPlayerID = localPlayerID;
-        }
+        #endregion Update Loop
 
         #region Handle Incoming Events
 
-        // Called on the WebSocket thread — only enqueue; all Unity API calls happen in Update.
+        /// <summary>
+        /// Replaces the latest game state with the one from the server. This is called on the WebSocket thread, so it only sets a variable; the actual handling happens in Update.
+        /// </summary>
+        /// <param name="dto">The game state DTO from the server.</param>
         void OnGameStateDTOReceived(GameStateDTO dto)
         {
             lock (_gameStateLock)
-                _latestGameStateDTO = dto; // always replace — only latest matters
+                _latestGameStateDTO = dto;
         }
 
         void OnSingleActionDTOReceived(SingleActionDTO dto) => _incomingSingleActions.Enqueue(dto);
 
+        /// <summary>
+        /// This handles incoming messages from the server or other clients, which can be either a <see cref="GameStateDTO"/> or a <see cref="SingleActionDTO"/>.
+        /// </summary>
+        /// <param name="objDTO">The queued DTO.</param>
         void HandleIncomingMessage(object objDTO)
         {
 
             if (objDTO is GameStateDTO gameStateDTO)
             {
-                string cubeStateString = "";
-                foreach (CubeState cubeState in gameStateDTO.Cubes)
-                {
-                    cubeStateString += $"ID: {cubeState.ID}; permissions: ";
-                    foreach (int ID in cubeState.GrabPermissions.Keys)
-                    {
-                        cubeStateString += $"PlayerID {ID} - {cubeState.GrabPermissions[ID]}, ";
-                    }
-                    cubeStateString += "\n";
-                }
-
-                Debug.Log($"Incoming DTO:\n {cubeStateString}");
-
                 _authoritativeGameState.ApplyGameState(_estimatedRoundTripTime, gameStateDTO);
                 AcknowledgeAppliedActions(gameStateDTO.PlayerLogicalTimestamps);
                 ApplyingPredictedState();
@@ -346,7 +375,7 @@ namespace Client.Scene.Manager
 
         #endregion Handle Incoming Events
 
-        #region Handle Game Master Events
+        #region Handle GameState Events
 
         void HandleCubeAdded(CubeState state)
         {
@@ -419,11 +448,11 @@ namespace Client.Scene.Manager
             // Set the position if our player isn't holding the cube.
             if (cubeState.HolderPlayerID != LocalPlayerID)
             {
-                cube.transform.SetPositionAndRotation(Conversions.ToUnityPosition(cubeState.Pose), Conversions.ToUnityRotation(cubeState.Pose));
+                cube.transform.SetLocalPositionAndRotation(Conversions.ToUnityPosition(cubeState.Pose), Conversions.ToUnityRotation(cubeState.Pose));
             }
         }
 
-        #endregion Handle Game Master Events
+        #endregion Handle GameState Events
 
         #region Handle Our Actions
 
@@ -449,8 +478,6 @@ namespace Client.Scene.Manager
             if (cube.FollowTarget != hand.transform)
                 return;
 
-            Debug.Log("Player released cube!");
-
             HandleOurAction(new ReleaseCubeAction(LocalPlayerID, _estimatedServerTime, cube.Id));
         }
 
@@ -469,11 +496,11 @@ namespace Client.Scene.Manager
 
 
                 Transform t = cube.transform;
-                if (Vector3.Distance(t.position, Conversions.ToUnityPosition(state.Pose)) < _poseSendThreshold &&
-                    Quaternion.Angle(t.rotation, Conversions.ToUnityRotation(state.Pose)) < _poseSendThreshold)
+                if (Vector3.Distance(t.localPosition, Conversions.ToUnityPosition(state.Pose)) < _poseSendThreshold &&
+                    Quaternion.Angle(t.localRotation, Conversions.ToUnityRotation(state.Pose)) < _poseSendThreshold)
                     continue;
 
-                HandleOurAction(new MoveCubeAction(LocalPlayerID, _estimatedServerTime, cube.Id, Conversions.ToSharedPose(t.position, t.rotation)));
+                HandleOurAction(new MoveCubeAction(LocalPlayerID, _estimatedServerTime, cube.Id, Conversions.ToSharedPose(t.localPosition, t.localRotation)));
             }
         }
 

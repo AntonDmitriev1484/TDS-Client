@@ -3,6 +3,8 @@ using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using SharedLibrary.Communication.Connection;
 using SharedLibrary.Communication.DataTransferObjects;
+using SharedLibrary.Communication.DataTransferObjects.Game;
+using SharedLibrary.Communication.DataTransferObjects.SpatialSync;
 using SharedLibrary.Utilities;
 using System;
 using System.Collections;
@@ -51,6 +53,8 @@ namespace Client.Communication.Manager
         /// </summary>
         // Web Socket for game connection
         private WebSocket GameWebSocket;
+        // Web Socket for spatial synchronization connection
+        private WebSocket SpatialSyncWebSocket;
         public Dictionary<ConnectionType, float> EstimatedLatencyDict { get; set; }
 
         [SerializeField]
@@ -81,7 +85,7 @@ namespace Client.Communication.Manager
         // Inbound WebSocket Messages – subscribers receive each message as a typed UnityEvent.
         public Dictionary<Type, UnityEventBase> InboundMessagesDict = new Dictionary<Type, UnityEventBase>();
 
-        // A curated list of types (adjust as per your needs)
+        // A curated list of types (adjust as needed). This is used to initialize InboundMessagesDict with a UnityEvent<T> for each type.
         private List<Type> InboundMessageTypes = new List<Type>
         {
             typeof(QueueDTO),
@@ -89,6 +93,8 @@ namespace Client.Communication.Manager
             typeof(SingleActionDTO),
             typeof(GameStateDTO),
             typeof(ResponseDTO),
+            typeof(SyncResponseDTO),
+            typeof(BeginSpatialSyncDTO),
         };
 
         #endregion Events
@@ -96,7 +102,7 @@ namespace Client.Communication.Manager
         #region Initialization
 
         /// <summary>
-        /// Singleton for Server Manager.
+        /// Singleton for Connection Manager.
         /// </summary>
         private void Awake()
         {
@@ -105,10 +111,10 @@ namespace Client.Communication.Manager
                 Instance = this;
                 DontDestroyOnLoad(gameObject);
 
-                // Set initial variables on server state and settings
+                // Set initial variables on connection state and settings
                 IsInitialized = false;
 
-                // Wait for necessary objects before initializing Server Manager
+                // Wait for necessary objects before initializing Connection Manager
                 StartCoroutine(WaitToInitialize());
             }
             else
@@ -118,7 +124,7 @@ namespace Client.Communication.Manager
         }
 
         /// <summary>
-        /// Wait on necessary objects to initialize before initializing Server Manager.
+        /// Wait on necessary objects to initialize before initializing Connection Manager.
         /// </summary>
         private IEnumerator WaitToInitialize()
         {
@@ -127,12 +133,12 @@ namespace Client.Communication.Manager
                 yield return null;
             }
 
-            // Passed wait checks on other needed objects, can now initialize server
+            // Passed wait checks on other needed objects, can now initialize connection
             // Use a coroutine to wait for the async operation to complete
-            yield return StartCoroutine(InitializeServerCoroutine());
+            yield return StartCoroutine(InitializeConnectionCoroutine());
         }
 
-        private IEnumerator InitializeServerCoroutine()
+        private IEnumerator InitializeConnectionCoroutine()
         {
             InitializeServerVariables();
             InitializeWebSocketEvents();
@@ -163,7 +169,7 @@ namespace Client.Communication.Manager
         }
 
         /// <summary>
-        /// Variable Initialization for Server Manager Singleton
+        /// Variable Initialization for Connection Manager Singleton
         /// </summary>
         private void InitializeServerVariables()
         {
@@ -196,7 +202,7 @@ namespace Client.Communication.Manager
         }
 
         /// <summary>
-        /// Connection Initialization for Server Manager Singleton.
+        /// Connection Initialization for Connection Manager Singleton.
         /// </summary>
         private async Task InitializeServerConnection()
         {
@@ -238,7 +244,7 @@ namespace Client.Communication.Manager
             }
 
             IsInitialized = true;
-            Debug.Log("Server Manager initialized!");
+            Debug.Log("[Connection Manager] Initialized!");
         }
 
         /// <summary>
@@ -560,9 +566,13 @@ namespace Client.Communication.Manager
                     this.GameWebSocket = new WebSocket(wsUrl);
                     webSocket = this.GameWebSocket;
                     break;
+                case ConnectionType.SpatialSync:
+                    this.SpatialSyncWebSocket = new WebSocket(wsUrl);
+                    webSocket = this.SpatialSyncWebSocket;
+                    break;
                 default:
                     string methodName = System.Reflection.MethodBase.GetCurrentMethod().Name;
-                    Debug.LogError($"Connection type {connectionType.ToString()} is not supported in Server Manager. See {methodName} method for details.");
+                    Debug.LogError($"Connection type {connectionType.ToString()} is not supported in Connection Manager. See {methodName} method for details.");
                     return false;
             }
 
@@ -879,9 +889,12 @@ namespace Client.Communication.Manager
                 case ConnectionType.Game:
                     webSocket = this.GameWebSocket;
                     break;
+                case ConnectionType.SpatialSync:
+                    webSocket = this.SpatialSyncWebSocket;
+                    break;
                 default:
                     string methodName = System.Reflection.MethodBase.GetCurrentMethod().Name;
-                    Debug.LogError($"{connectionType.ToString()} WebSocket is not supported in Server Manager. See {methodName} method for more details");
+                    Debug.LogError($"{connectionType.ToString()} WebSocket is not supported in Connection Manager. See {methodName} method for more details");
                     return null;
             }
 
@@ -903,7 +916,7 @@ namespace Client.Communication.Manager
                     break;
                 default:
                     string methodName = System.Reflection.MethodBase.GetCurrentMethod().Name;
-                    Debug.LogError($"{connectionType.ToString()} WebSocket is not supported in Server Manager. See {methodName} method for more details");
+                    Debug.LogError($"{connectionType.ToString()} WebSocket is not supported in Connection Manager. See {methodName} method for more details");
                     return -1.0f;
             }
 

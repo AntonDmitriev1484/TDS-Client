@@ -1,7 +1,7 @@
 using SharedLibrary.Game.Actions;
 using System;
 
-namespace SharedLibrary.Communication.DataTransferObjects
+namespace SharedLibrary.Communication.DataTransferObjects.Game
 {
     /// <summary>
     /// Carries one <see cref="SingleAction"/> between client and server.

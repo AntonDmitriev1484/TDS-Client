@@ -2,7 +2,7 @@ using SharedLibrary.Game;
 using System;
 using System.Collections.Generic;
 
-namespace SharedLibrary.Communication.DataTransferObjects
+namespace SharedLibrary.Communication.DataTransferObjects.Game
 {
     /// <summary>
     /// A full snapshot of the game state. Sent to start the game, and to resync a client whose

@@ -1,4 +1,4 @@
-using SharedLibrary.Communication.DataTransferObjects;
+using SharedLibrary.Communication.DataTransferObjects.Game;
 using SharedLibrary.Game.Actions;
 using SharedLibrary.Utilities;
 using System;

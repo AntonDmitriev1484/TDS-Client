@@ -21,8 +21,7 @@ namespace Client.Scene.Manager
     /// </summary>
     public class GrabbableCubeManager : MonoBehaviour
     {
-        [Tooltip("Edge length of spawned cubes when no size is given (meters).")]
-        [SerializeField] float _cubeSize = 0.2f;
+        [SerializeField] float _cubeSize = 0.25f;
         [SerializeField] Color _cubeColor = new Color(0.2f, 0.6f, 1f);
 
         [Tooltip("How far outside a cube's surface a hand point still counts as touching it (meters).")]
@@ -39,6 +38,8 @@ namespace Client.Scene.Manager
 
         [Tooltip("How long a pinch on a cube survives while the hand is untracked (seconds).")]
         [SerializeField] float _trackingLossTolerance = 0.5f;
+
+        private GameObject _sharedScene;
 
         /// <summary>A hand started pinching on a cube.</summary>
         public event Action<GrabbableCube, OVRHand> PinchStarted;
@@ -72,14 +73,17 @@ namespace Client.Scene.Manager
 
             if (_hands.Count == 0)
                 Debug.LogError($"{nameof(GrabbableCubeManager)}: no OVRHand found in the scene.");
+
+            _sharedScene = GameObject.Find("SharedScene");
+            if (_sharedScene == null)
+                Debug.LogError($"{nameof(GrabbableCubeManager)}: no GameObject named 'SharedScene' found in the scene.");
         }
 
         /// <summary>
         /// Creates a cube at <paramref name="pose"/>. Pass an <paramref name="id"/> to use one
-        /// assigned elsewhere (e.g. by a server); otherwise one is generated. Pass a
-        /// <paramref name="size"/> to override <see cref="CubeSize"/>.
+        /// assigned elsewhere (e.g. by a server); otherwise one is generated.
         /// </summary>
-        public GrabbableCube SpawnCube(Pose pose, string id = null, float? size = null)
+        public GrabbableCube SpawnCube(Pose pose, string id = null)
         {
             id ??= NextFreeId();
             if (_cubes.ContainsKey(id))
@@ -87,8 +91,10 @@ namespace Client.Scene.Manager
 
             var go = GameObject.CreatePrimitive(PrimitiveType.Cube);
             go.name = $"GrabbableCube ({id})";
-            go.transform.SetPositionAndRotation(pose.position, pose.rotation);
-            go.transform.localScale = Vector3.one * (size ?? _cubeSize);
+            go.transform.SetParent(_sharedScene.transform, false);
+            go.transform.localPosition = pose.position;
+            go.transform.localRotation = pose.rotation;
+            go.transform.localScale = Vector3.one * _cubeSize;
 
             // Kinematic so it stays put when released: there is no physical floor in passthrough.
             var body = go.AddComponent<Rigidbody>();

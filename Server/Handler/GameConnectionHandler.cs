@@ -1,6 +1,8 @@
 ﻿using Newtonsoft.Json;
 using Server.Manager;
+using Server.Manager.Game;
 using SharedLibrary.Communication.DataTransferObjects;
+using SharedLibrary.Communication.DataTransferObjects.Game;
 using SharedLibrary.Utilities;
 using System.Net.WebSockets;
 using System.Text;
@@ -24,7 +26,7 @@ namespace Server.Handler
         #region Handle Connections
 
         /// <summary>
-        /// Handles an incoming web socket connection from a client for a PVP application connection.
+        /// Handles an incoming web socket connection from a client for a multi-user application connection.
         /// </summary>
         /// <param name="webSocket">The web socket.</param>
         /// <param name="playerID">The player ID.</param>
@@ -39,12 +41,34 @@ namespace Server.Handler
                 using (var scope = _scopeFactory.CreateScope())
                 {
                     var gameConnectionManager = scope.ServiceProvider.GetRequiredService<GameConnectionManager>();
+
+                    if (!gameConnectionManager.AddSocket(webSocket))
+                    {
+                        throw new Exception("The WebSocket could not be added to the Game Connection Manager.");
+                    }
+
                     gameConnectionManager.AddGameSocket(playerID, webSocket);
                 }
 
-                while ((result = await webSocket.ReceiveAsync(new ArraySegment<byte>(buffer), CancellationToken.None)).MessageType != WebSocketMessageType.Close)
+                while (true)
                 {
-                    var message = Encoding.UTF8.GetString(buffer, 0, result.Count);
+                    using var messageStream = new MemoryStream();
+
+                    do
+                    {
+                        result = await webSocket.ReceiveAsync(new ArraySegment<byte>(buffer), CancellationToken.None);
+
+                        if (result.MessageType == WebSocketMessageType.Close)
+                            break;
+
+                        messageStream.Write(buffer, 0, result.Count);
+                    }
+                    while (!result.EndOfMessage);
+
+                    if (result.MessageType == WebSocketMessageType.Close)
+                        break;
+
+                    var message = Encoding.UTF8.GetString(messageStream.ToArray());
 
                     try
                     {
@@ -79,16 +103,35 @@ namespace Server.Handler
                 // Rmove the game socket and dequeue the player from any queues it may be in.
                 using (var scope = _scopeFactory.CreateScope())
                 {
-                    var webSocketConnectionManager = scope.ServiceProvider.GetRequiredService<GameConnectionManager>();
-                    webSocketConnectionManager.RemoveGameSocket(playerID);
+                    var gameConnectionManager = scope.ServiceProvider.GetRequiredService<GameConnectionManager>();
+                    gameConnectionManager.RemoveSocket(webSocket);
+                    gameConnectionManager.RemoveGameSocket(playerID);
+
+                    var gameCoordinator = scope.ServiceProvider.GetRequiredService<GameCoordinator>();
+                    var gameStateManager = gameCoordinator.GetGameByPlayerID(playerID);
+
+                    if (gameStateManager != null)
+                    {
+                        gameStateManager.OnPlayerDisconnected(playerID);
+                    }
 
                     var queuesManager = scope.ServiceProvider.GetRequiredService<QueueManager>();
                     queuesManager.DequeuePlayer(playerID);
                 }
 
-                if (webSocket.State == WebSocketState.Open)
+                // Closing writes a frame too, so it takes the same lock as sends.
+                SemaphoreSlim sendLock = WebSocketSendLock.For(webSocket);
+                await sendLock.WaitAsync();
+                try
                 {
-                    await webSocket.CloseAsync(WebSocketCloseStatus.NormalClosure, "Closing", CancellationToken.None);
+                    if (webSocket.State == WebSocketState.Open)
+                    {
+                        await webSocket.CloseAsync(WebSocketCloseStatus.NormalClosure, "Closing", CancellationToken.None);
+                    }
+                }
+                finally
+                {
+                    sendLock.Release();
                 }
                 webSocket.Dispose();
             }
@@ -314,7 +357,23 @@ namespace Server.Handler
 
             var serializedMessage = JsonUtilities.ToJson(message);
             var buffer = Encoding.UTF8.GetBytes(serializedMessage);
-            await webSocket.SendAsync(new ArraySegment<byte>(buffer), WebSocketMessageType.Text, true, CancellationToken.None);
+
+            // A web socket only allows one send at a time, and sends can come from several threads, so they take turns.
+            SemaphoreSlim sendLock = WebSocketSendLock.For(webSocket);
+            await sendLock.WaitAsync();
+            try
+            {
+                if (webSocket.State != WebSocketState.Open)
+                {
+                    return false;
+                }
+
+                await webSocket.SendAsync(new ArraySegment<byte>(buffer), WebSocketMessageType.Text, true, CancellationToken.None);
+            }
+            finally
+            {
+                sendLock.Release();
+            }
 
             return true;
         }
