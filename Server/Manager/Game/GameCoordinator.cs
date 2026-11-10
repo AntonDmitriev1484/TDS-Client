@@ -147,12 +147,13 @@ namespace Server.Manager.Game
         /// Generate a game for a set of players.
         /// </summary>
         /// <param name="playerIDs">The list of player IDs for the players to generate the game for.</param>
+        /// <param name="layout">Where the board and goals go in the shared frame; the default layout if omitted.</param>
         /// <returns>The manager for the generated game instance.</returns>
-        public async Task GenerateGame(List<int> playerIDs)
+        public async Task GenerateGame(List<int> playerIDs, BoardLayout? layout = null)
         {
             try
             {
-                ServerGameStateManager gameStateManager = new ServerGameStateManager(_scopeFactory, _serverSettings, playerIDs);
+                ServerGameStateManager gameStateManager = new ServerGameStateManager(_scopeFactory, _serverSettings, playerIDs, layout);
                 this.AddGame(gameStateManager);
                 return;
             }

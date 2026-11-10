@@ -21,7 +21,7 @@ namespace Server.Manager
         /// How long a matched group gets to form a global map (all of its players' key frames merged into one map) before the match
         /// is abandoned and the players are put back in the queue.
         /// </summary>
-        public int GlobalMapTimeoutSeconds { get; set; } = 180;
+        public int GlobalMapTimeoutSeconds { get; set; } = 1000;
 
         /// <summary>The minimum number of players required to start a game session.</summary>
         private int MinPlayersPerSession;
@@ -228,11 +228,15 @@ namespace Server.Manager
                     return;
                 }
 
+                // Lay the board out between the players' heads in the global frame, which is the frame every client's SharedScene is aligned to.
+                BoardLayout layout = BoardLayout.FromGlobalMap(spatialSyncManager.GlobalMappingManager,
+                    ServerGameStateManager.Player1ID, ServerGameStateManager.Player2ID, ServerGameStateManager.GoalDistanceFromCenter);
+
                 // Create a game with the players that are in the global map (some may have dropped while waiting).
                 using (var scope = _scopeFactory.CreateScope())
                 {
                     var gameCoordinator = scope.ServiceProvider.GetRequiredService<GameCoordinator>();
-                    await gameCoordinator.GenerateGame(readyPlayerIDs);
+                    await gameCoordinator.GenerateGame(readyPlayerIDs, layout);
                 }
                 gameCreated = true;
 

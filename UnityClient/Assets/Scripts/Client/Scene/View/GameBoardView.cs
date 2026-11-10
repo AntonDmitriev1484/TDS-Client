@@ -11,11 +11,15 @@ using Vector3 = UnityEngine.Vector3;
 /// state. Nothing here is interactive: these are only visuals, and every change to them comes from
 /// the server. Scores sit at the midpoint of the board edge nearest that player's goal, i.e. their
 /// end of the table, and always turn to face this client's camera.
+///
+/// The server's poses are in the shared frame, so every visual is a child of the SharedScene object
+/// (which spatial sync aligns across headsets) and placed with local poses, as the cubes are.
 /// </summary>
 public class GameBoardView : MonoBehaviour
 {
     // Sprites/Default is always included in builds, unlike the Standard shader's transparent variants.
     const string TransparentShaderName = "Sprites/Default";
+    const string SharedSceneName = "SharedScene";
 
     [Header("Scores")]
     [Tooltip("Score text size (TextMeshPro font size; about 0.1 m per unit).")]
@@ -27,6 +31,33 @@ public class GameBoardView : MonoBehaviour
     Renderer _board;
     readonly Dictionary<int, Renderer> _goals = new Dictionary<int, Renderer>();
     readonly Dictionary<int, TextMeshPro> _scores = new Dictionary<int, TextMeshPro>();
+
+    Transform _sharedScene;
+    bool _warnedNoSharedScene;
+
+    /// <summary>
+    /// The SharedScene object every visual is parented to. Null (and the visuals stay at the root,
+    /// i.e. in this headset's own frame) if the scene has none.
+    /// </summary>
+    Transform SharedScene
+    {
+        get
+        {
+            if (_sharedScene == null)
+            {
+                GameObject go = GameObject.Find(SharedSceneName);
+                if (go != null)
+                    _sharedScene = go.transform;
+                else if (!_warnedNoSharedScene)
+                {
+                    _warnedNoSharedScene = true;
+                    Debug.LogError($"{nameof(GameBoardView)}: no GameObject named '{SharedSceneName}' found; drawing the board in this headset's own frame.");
+                }
+            }
+
+            return _sharedScene;
+        }
+    }
 
     void LateUpdate()
     {
@@ -110,7 +141,7 @@ public class GameBoardView : MonoBehaviour
                 text.text = $"Player {goal.PlayerID}: {score}";
                 // The player's goal color, opaque so the text stays readable over the semi-transparent goals.
                 text.color = new Color(goal.Color.R, goal.Color.G, goal.Color.B, 1f);
-                text.transform.position = GetPlayerEndOfBoard(board, Conversions.ToUnityPosition(goal.Pose));
+                text.transform.localPosition = GetPlayerEndOfBoard(board, Conversions.ToUnityPosition(goal.Pose));
             }
         }
 
@@ -127,6 +158,7 @@ public class GameBoardView : MonoBehaviour
     TextMeshPro CreateScoreText(int playerID)
     {
         var go = new GameObject($"Score (player {playerID})");
+        go.transform.SetParent(SharedScene, false);
         var text = go.AddComponent<TextMeshPro>();
         text.fontSize = _scoreFontSize;
         text.alignment = TextAlignmentOptions.Center;
@@ -139,6 +171,7 @@ public class GameBoardView : MonoBehaviour
     /// <summary>
     /// The midpoint of the board edge nearest <paramref name="playerGoalPosition"/>, raised just
     /// above the board's top face. Goals sit above their players, so this is that player's end.
+    /// Everything here is in the shared frame, so the result is a position local to SharedScene.
     /// </summary>
     Vector3 GetPlayerEndOfBoard(BoardState board, Vector3 playerGoalPosition)
     {
@@ -160,6 +193,7 @@ public class GameBoardView : MonoBehaviour
     {
         var go = GameObject.CreatePrimitive(PrimitiveType.Cube);
         go.name = name;
+        go.transform.SetParent(SharedScene, false);
 
         // Visual only: keep it out of hand proximity tests and physics.
         Destroy(go.GetComponent<Collider>());
@@ -179,7 +213,9 @@ public class GameBoardView : MonoBehaviour
 
     static void Place(Renderer visual, SharedLibrary.Game.Actions.Pose pose, Vector3 scale, RGBAColor color)
     {
-        visual.transform.SetPositionAndRotation(Conversions.ToUnityPosition(pose), Conversions.ToUnityRotation(pose));
+        // A shared-frame pose, so local to SharedScene.
+        visual.transform.localPosition = Conversions.ToUnityPosition(pose);
+        visual.transform.localRotation = Conversions.ToUnityRotation(pose);
         visual.transform.localScale = scale;
         visual.material.color = new Color(color.R, color.G, color.B, color.A);
     }

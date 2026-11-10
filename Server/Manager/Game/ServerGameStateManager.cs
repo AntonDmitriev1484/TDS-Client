@@ -32,35 +32,29 @@ namespace Server.Manager.Game
         Vector3 _boardSize = new Vector3(0.75f, 0.1f, 0.75f);
         // Cubes spawn on one cell of a grid this many cells wide and deep.
         int _gridSize = 8;
-        // How far in front of player 1's origin the board's center is (meters).
-        float _boardForwardOffset = 0.5f;
-        // How far below player 1's origin the board's center is (meters).
+        // How far each player's goal is from the layout's center, horizontally, toward that player's end of the board (meters).
+        // It is also how far ahead of a lone player the center goes (BoardLayout.InFrontOf).
+        public const float GoalDistanceFromCenter = 0.5f;
+        float _boardForwardOffset = GoalDistanceFromCenter;
+        // How far below the layout's center the board's center is (meters).
         float _boardDownOffset = 0.5f;
         // Edge length of each player's goal cube (meters).
         float _goalSize = 0.5f;
-        // How far above each player's origin their goal's center is (meters).
+        // How far above the layout's center the goals' centers are (meters).
         float _goalHeightAboveHead = 0.5f;
         // Seconds a cube must stay inside a goal to score.
         float _timeInGoalToScore = 0.5f;
         // The game ends once the round passes this number.
         int _maxRounds = 12;
 
-        // The server can't see the players' heads, so player 1's origin is the world origin, facing +Z.
-        static readonly Vector3 Player1Origin = Vector3.Zero;
-        static readonly Vector3 Player1Forward = new Vector3(0f, 0f, 1f);
-
         // Goals exist for both players.
-        const int Player1ID = 1;
-        const int Player2ID = 2;
+        public const int Player1ID = 1;
+        public const int Player2ID = 2;
 
         static readonly RGBAColor BoardColor = new RGBAColor(0.5f, 0.5f, 0.5f);
         static readonly RGBAColor Player1GoalColor = new RGBAColor(1f, 0f, 0f, 0.3f);
         static readonly RGBAColor Player2GoalColor = new RGBAColor(0f, 0f, 1f, 0.3f);
         static readonly RGBAColor GameOverGoalColor = new RGBAColor(0f, 1f, 0f, 0.3f);
-
-        // Facing +Z, and turned 180 degrees about Y to face back across the board.
-        static readonly Quaternion Player1Rotation = Quaternion.Identity;
-        static readonly Quaternion Player2Rotation = new Quaternion(0f, 1f, 0f, 0f);
 
         readonly Random _random = new Random();
         int _nextCubeID;
@@ -128,12 +122,13 @@ namespace Server.Manager.Game
         /// to prepare the game.</remarks>
         /// <param name="scopeFactory">Factory for creating IServiceScope instances to resolve scoped services.</param>
         /// <param name="playerIDs">Initial list of player IDs used to populate the game's initial state.</param>
-        public ServerGameStateManager(IServiceScopeFactory scopeFactory, ServerSettings serverSettings, List<int> playerIDs)
+        /// <param name="layout">Where the board and goals go in the shared frame; <see cref="BoardLayout.Default"/> if omitted.</param>
+        public ServerGameStateManager(IServiceScopeFactory scopeFactory, ServerSettings serverSettings, List<int> playerIDs, BoardLayout? layout = null)
         {
             _scopeFactory = scopeFactory;
             GameState = new GameState(isAuthoritative: true);
             PlayerLogicalTimestamps = new Dictionary<int, long>();
-            InitializeGame(playerIDs);
+            InitializeGame(playerIDs, layout ?? BoardLayout.Default);
             // Start the periodic state synchronization loop
             StartStateSync();
         }
@@ -145,9 +140,12 @@ namespace Server.Manager.Game
         /// <summary>
         /// Builds the authoritative game state and sends it to every connected player. Players who
         /// connect later get it in <see cref="OnPlayerConnected"/>.
+        /// The board sits <see cref="_boardDownOffset"/> below the layout's center, pointing from player 1's end to player 2's. Each goal is
+        /// <see cref="_boardForwardOffset"/> from the center toward its player's end and <see cref="_goalHeightAboveHead"/> above the center.
         /// <paramref name="playerIDs"/> The list of player IDs who are initially connected to game instance.</param>
+        /// <paramref name="layout"/> Where the board and goals go in the shared frame.</param>
         /// </summary>
-        void InitializeGame(List<int> playerIDs)
+        void InitializeGame(List<int> playerIDs, BoardLayout layout)
         {
             ServerTime = TimeUtilities.GetTime();
             double serverStartTime = ServerTime;
@@ -157,16 +155,16 @@ namespace Server.Manager.Game
             // for (int i = 0; i < startingPoses.Length; i++)
             //     cubes.Add(new CubeState($"cube-{i}", serverStartTime, serverStartTime, startingPoses[i], playerIDs));
 
-            Vector3 boardCenter = Player1Origin + Player1Forward * _boardForwardOffset + new Vector3(0f, -_boardDownOffset, 0f);
-            var board = new BoardState(BoardColor, new Pose(boardCenter, Player1Rotation), _gridSize, _boardSize);
+            Vector3 boardCenter = layout.Center + new Vector3(0f, -_boardDownOffset, 0f);
+            var board = new BoardState(BoardColor, new Pose(boardCenter, layout.Player1Rotation), _gridSize, _boardSize);
 
-            // Player 2 is mirrored across the board from player 1: as far beyond it, facing back.
-            Vector3 player2Origin = Player1Origin + Player1Forward * (2f * _boardForwardOffset);
-            Vector3 aboveHead = new Vector3(0f, _goalHeightAboveHead, 0f);
+            // Player 1's goal is at their end of the board (back along Forward), player 2's at the other end, facing back across it.
+            Vector3 aboveCenter = layout.Center + new Vector3(0f, _goalHeightAboveHead, 0f);
+            Vector3 alongBoard = layout.Forward * _boardForwardOffset;
             var goals = new[]
             {
-                new GoalCubeState(Player1ID, Player1GoalColor, new Pose(Player1Origin + aboveHead, Player1Rotation), _goalSize),
-                new GoalCubeState(Player2ID, Player2GoalColor, new Pose(player2Origin + aboveHead, Player2Rotation), _goalSize),
+                new GoalCubeState(Player1ID, Player1GoalColor, new Pose(aboveCenter - alongBoard, layout.Player1Rotation), _goalSize),
+                new GoalCubeState(Player2ID, Player2GoalColor, new Pose(aboveCenter + alongBoard, layout.Player2Rotation), _goalSize),
             };
 
             _nextCubeID = 0;
