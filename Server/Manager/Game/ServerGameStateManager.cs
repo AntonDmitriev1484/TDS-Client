@@ -185,7 +185,35 @@ namespace Server.Manager.Game
             GameState.ServerInitialize(playerIDs, cubes, board, goals);
             GameState.ServerAddCube(CreateCubeOnBoard());
 
+            using (var scope = _scopeFactory.CreateScope())
+                SetDriftError(scope.ServiceProvider.GetRequiredService<StudyStateManager>());
+
             BroadcastGameState();
+        }
+
+        StudyState? _driftErrorState; // The study state DriftError was last set for, so the change can be logged once.
+
+        /// <summary>
+        /// Keeps every player's view drift in step with the study's current state. Called every tick. In
+        /// <see cref="StudyState.No_Latency_Hi_Drift"/> and <see cref="StudyState.Hi_Latency_Hi_Drift"/> each player gets
+        /// (<see cref="StudyStateManager.DriftRot"/>, <see cref="StudyStateManager.DriftTrans"/>); in every other state, (0, 0).
+        /// Each client picks for itself which way (+ or -) to turn by drift_rot.
+        /// </summary>
+        void SetDriftError(StudyStateManager study)
+        {
+            StudyState state = study.CurrentState;
+            bool highDrift = state == StudyState.No_Latency_Hi_Drift || state == StudyState.Hi_Latency_Hi_Drift;
+            (float, float) drift = highDrift ? (StudyStateManager.DriftRot, StudyStateManager.DriftTrans) : (0f, 0f);
+
+            GameState.DriftError.Clear();
+            foreach (int playerID in GameState.PlayerIDs.Union(GameState.Goals.Keys))
+                GameState.DriftError[playerID] = drift;
+
+            if (_driftErrorState != state)
+            {
+                _driftErrorState = state;
+                Console.WriteLine($"[Study] {state}: every player's drift is now rot {drift.Item1:0.#} deg, trans {drift.Item2:0.00} m.");
+            }
         }
 
         /// <summary>
@@ -377,6 +405,10 @@ namespace Server.Manager.Game
                     {
                         RestartAfterGameOver();
                     }
+
+                    // Keep the drift in step with the study state, whatever changed it.
+                    using (var scope = _scopeFactory.CreateScope())
+                        SetDriftError(scope.ServiceProvider.GetRequiredService<StudyStateManager>());
 
                     // Broadcast the updated state to all players
                     BroadcastGameState();

@@ -29,6 +29,12 @@ namespace SharedLibrary.Game
         public Dictionary<int, GoalCubeState> Goals { get; } = new Dictionary<int, GoalCubeState>();
         /// <summary>The board cubes spawn on; null until the game starts.</summary>
         public BoardState Board { get; set; }
+        /// <summary>
+        /// The drift each player's view is given, keyed by player ID: (drift_rot, drift_trans). Each client turns its world root
+        /// (SharedScene) by drift_rot degrees about the vertical axis (the sign says which way), then shifts it drift_trans meters.
+        /// It only moves where that player sees things; the game itself is unaffected. A player with no entry has no drift.
+        /// </summary>
+        public Dictionary<int, (float, float)> DriftError { get; } = new Dictionary<int, (float, float)>();
 
         public double GameStartTime { get; set; }
         public double ServerClockOffset { get; set; }
@@ -125,6 +131,7 @@ namespace SharedLibrary.Game
 
             Round = gameStateDTO.Round;
             CopyScoresAndGoals(gameStateDTO.Scores, gameStateDTO.Goals.Values, gameStateDTO.Board);
+            CopyDriftError(gameStateDTO.DriftError);
 
             var incomingCubeIDs = new HashSet<string>(gameStateDTO.Cubes.Select(cube => cube.ID));
             foreach (string cubeID in Cubes.Keys.Where(id => !incomingCubeIDs.Contains(id)).ToList())
@@ -165,6 +172,7 @@ namespace SharedLibrary.Game
             LatestOffsetUpdateTime = authoritativeState.LatestOffsetUpdateTime;
             Round = authoritativeState.Round;
             CopyScoresAndGoals(authoritativeState.Scores, authoritativeState.Goals.Values, authoritativeState.Board);
+            CopyDriftError(authoritativeState.DriftError);
 
             foreach (string cubeID in new List<string>(Cubes.Keys))
             {
@@ -201,6 +209,16 @@ namespace SharedLibrary.Game
                 Goals[goal.PlayerID] = goal.GetDeepCopy();
 
             Board = board?.GetDeepCopy();
+        }
+
+        void CopyDriftError(Dictionary<int, (float, float)> driftError)
+        {
+            DriftError.Clear();
+            if (driftError == null)
+                return;
+
+            foreach (var kvp in driftError)
+                DriftError[kvp.Key] = kvp.Value;
         }
 
         /// <summary>

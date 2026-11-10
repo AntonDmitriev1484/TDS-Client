@@ -258,6 +258,13 @@ namespace Client.Scene.Manager
                 AcknowledgeAppliedActions(gameStateDTO.PlayerLogicalTimestamps);
                 ApplyingPredictedState();
                 _boardView.Apply(GameState.Board, GameState.Goals.Values, GameState.Scores);
+
+                // This player's view drift; no entry means none.
+                if (SpatialSyncManager.Instance != null)
+                {
+                    GameState.DriftError.TryGetValue(LocalPlayerID, out (float, float) drift);
+                    SpatialSyncManager.Instance.SetDrift(drift.Item1, drift.Item2);
+                }
             }
             else if (objDTO is SingleActionDTO singleActionDTO)
             {

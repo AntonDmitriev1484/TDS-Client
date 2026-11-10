@@ -18,6 +18,8 @@ namespace SharedLibrary.Communication.DataTransferObjects.Game
         public Dictionary<int, int> Scores = new Dictionary<int, int>();
         public Dictionary<int, GoalCubeState> Goals = new Dictionary<int, GoalCubeState>();
         public BoardState Board;
+        /// <summary>Each player's view drift, (drift_rot degrees, drift_trans meters); see <see cref="GameState.DriftError"/>.</summary>
+        public Dictionary<int, (float, float)> DriftError = new Dictionary<int, (float, float)>();
 
         /// <summary>
         /// Parameterless constructor for JSON deserialization between server and client.
@@ -37,6 +39,7 @@ namespace SharedLibrary.Communication.DataTransferObjects.Game
             foreach (var kvp in gameState.Goals)
                 Goals.Add(kvp.Key, kvp.Value.GetDeepCopy());
             Board = gameState.Board?.GetDeepCopy();
+            DriftError = new Dictionary<int, (float, float)>(gameState.DriftError);
         }
     }
 }

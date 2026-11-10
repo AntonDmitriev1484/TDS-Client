@@ -38,6 +38,16 @@ namespace Client.Scene.Manager
         private Vector3 _blendTargetPosition;
         private Quaternion _blendTargetRotation;
 
+        // The shared scene's pose from the alignment alone (global frame -> this headset's world), before any drift.
+        private Vector3 _alignedPosition = Vector3.zero;
+        private Quaternion _alignedRotation = Quaternion.identity;
+
+        // This player's view drift (GameState.DriftError): a turn about the vertical axis (degrees), then a shift along the
+        // global frame's X axis (meters), both applied to the shared scene on top of the alignment.
+        private float _driftRotationDegrees;          // As applied: the server's drift_rot with this headset's chosen sign
+        private float _receivedDriftRotationDegrees;  // As the server sent it
+        private float _driftTranslationMeters;
+
         private SceneAnchorManager _anchorManager;
 
         private SyncResponseDTO _latestSyncResponseDTO = null;
@@ -103,6 +113,12 @@ namespace Client.Scene.Manager
             _sharedScene = GameObject.Find("SharedScene");
             if (_sharedScene == null)
                 Debug.LogError($"{nameof(SpatialSyncManager)}: no GameObject named 'SharedScene' found in the scene.");
+            else
+            {
+                // Until the server aligns this headset, the scene's own pose is the alignment.
+                _alignedPosition = _sharedScene.transform.position;
+                _alignedRotation = _sharedScene.transform.rotation;
+            }
 
             if (ConnectionManager.Instance.InboundMessagesDict.TryGetValue(typeof(SyncResponseDTO), out var srEvent))
                 ((UnityEvent<SyncResponseDTO>)srEvent).AddListener(OnSyncResponseDTOReceived);
@@ -135,15 +151,33 @@ namespace Client.Scene.Manager
             }
 
             UpdateSharedSceneBlend();
+            ApplySharedScenePose();
         }
 
         /// <summary>
-        /// Moves the shared scene towards the latest alignment from the server: the position is interpolated and the rotation is
+        /// Sets this player's view drift: the shared scene is turned <paramref name="rotationDegrees"/> (in a randomly chosen direction, + or -) about the vertical axis through
+        /// its origin, then shifted <paramref name="translationMeters"/> along the global frame's X axis. Only changes where this player
+        /// sees things. (0, 0) removes the drift.
+        /// </summary>
+        public void SetDrift(float rotationDegrees, float translationMeters)
+        {
+            if (Mathf.Approximately(rotationDegrees, _receivedDriftRotationDegrees) && Mathf.Approximately(translationMeters, _driftTranslationMeters))
+                return;
+
+            // The server sends how far to turn; this headset picks which way, once per new drift, so it holds still in between.
+            _receivedDriftRotationDegrees = rotationDegrees;
+            _driftRotationDegrees = Random.value < 0.5f ? -rotationDegrees : rotationDegrees;
+            _driftTranslationMeters = translationMeters;
+            Debug.Log($"[{nameof(SpatialSyncManager)}] View drift set to {_driftRotationDegrees:+0.0;-0.0;0} deg, {translationMeters:0.00} m.");
+        }
+
+        /// <summary>
+        /// Moves the aligned pose towards the latest alignment from the server: the position is interpolated and the rotation is
         /// slerped, eased in and out, over <see cref="AlignmentBlendSeconds"/>.
         /// </summary>
         private void UpdateSharedSceneBlend()
         {
-            if (!_isBlending || _sharedScene == null)
+            if (!_isBlending)
             {
                 return;
             }
@@ -152,14 +186,32 @@ namespace Client.Scene.Manager
             float t = Mathf.Clamp01(_blendElapsed / AlignmentBlendSeconds);
             float eased = Mathf.SmoothStep(0f, 1f, t);
 
-            _sharedScene.transform.SetPositionAndRotation(
-                Vector3.Lerp(_blendStartPosition, _blendTargetPosition, eased),
-                Quaternion.Slerp(_blendStartRotation, _blendTargetRotation, eased));
+            _alignedPosition = Vector3.Lerp(_blendStartPosition, _blendTargetPosition, eased);
+            _alignedRotation = Quaternion.Slerp(_blendStartRotation, _blendTargetRotation, eased);
 
             if (t >= 1f)
             {
                 _isBlending = false;
             }
+        }
+
+        /// <summary>
+        /// Puts the shared scene at the aligned pose with this player's drift on top. A point g in the global frame ends up at
+        /// aligned * (driftRotation * g + driftTranslation): turned about the vertical axis, then shifted, then aligned.
+        /// </summary>
+        private void ApplySharedScenePose()
+        {
+            if (_sharedScene == null)
+            {
+                return;
+            }
+
+            Quaternion driftRotation = Quaternion.AngleAxis(_driftRotationDegrees, Vector3.up);
+            Vector3 driftTranslation = new Vector3(_driftTranslationMeters, 0f, 0f);
+
+            _sharedScene.transform.SetPositionAndRotation(
+                _alignedPosition + _alignedRotation * driftTranslation,
+                _alignedRotation * driftRotation);
         }
 
         /// <summary>
@@ -331,16 +383,18 @@ namespace Client.Scene.Manager
             // The first global pose puts the scene in place at once. Every later one is a correction of that alignment, so the
             // scene slerps to it over time instead of jumping. A response that arrives mid-blend starts a new blend from wherever
             // the scene is right now.
+            // (Both work on the aligned pose; the drift is put on top of it every frame.)
             if (!_hasAppliedGlobalPose || AlignmentBlendSeconds <= 0f)
             {
-                _sharedScene.transform.SetPositionAndRotation(position, rotation);
+                _alignedPosition = position;
+                _alignedRotation = rotation;
                 _hasAppliedGlobalPose = true;
                 _isBlending = false;
                 return;
             }
 
-            _blendStartPosition = _sharedScene.transform.position;
-            _blendStartRotation = _sharedScene.transform.rotation;
+            _blendStartPosition = _alignedPosition;
+            _blendStartRotation = _alignedRotation;
             _blendTargetPosition = position;
             _blendTargetRotation = rotation;
             _blendElapsed = 0f;
