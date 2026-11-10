@@ -59,6 +59,11 @@ namespace Server.Manager.Game
         readonly Random _random = new Random();
         int _nextCubeID;
         bool _gameOver;
+        // When the game last ended (server time), and whether to start the next one after the pause.
+        double _gameOverTime;
+        bool _restartAfterGameOver;
+        // How long the green game-over goals stay up before the next game starts (seconds).
+        double _pauseAfterGameOverSeconds = 3.0;
 
         // Cube ID -> the goal it is inside and the server time it entered.
         readonly Dictionary<string, (int PlayerID, double EnterTime)> _cubesInGoals = new Dictionary<string, (int, double)>();
@@ -368,6 +373,10 @@ namespace Server.Manager.Game
                         CubeTimeInGoal();
                         RoundTracker();
                     }
+                    else
+                    {
+                        RestartAfterGameOver();
+                    }
 
                     // Broadcast the updated state to all players
                     BroadcastGameState();
@@ -479,7 +488,10 @@ namespace Server.Manager.Game
 
         /// <summary>
         /// Ends the game once the round passes <see cref="_maxRounds"/>: both goals turn green and
-        /// scoring stops. The state sync loop broadcasts the result.
+        /// scoring stops. If one player has the highest score they won, and the study advances to its
+        /// next condition (<see cref="StudyStateManager.OnGameWon"/>); a tie replays the same condition.
+        /// Unless the study is complete, <see cref="RestartAfterGameOver"/> starts the next game after
+        /// <see cref="_pauseAfterGameOverSeconds"/>. The state sync loop broadcasts the result.
         /// </summary>
         void RoundTracker()
         {
@@ -487,10 +499,56 @@ namespace Server.Manager.Game
                 return;
 
             _gameOver = true;
+            _gameOverTime = ServerTime;
             foreach (GoalCubeState goal in GameState.Goals.Values)
                 goal.Color = GameOverGoalColor;
 
-            Console.WriteLine($"Game {ID} over after round {_maxRounds}.");
+            Console.WriteLine($"Game {ID} over after round {_maxRounds}. Scores: " +
+                string.Join(", ", GameState.Scores.OrderBy(s => s.Key).Select(s => $"player {s.Key}: {s.Value}")));
+
+            int? winnerID = GetWinner();
+            using var scope = _scopeFactory.CreateScope();
+            var study = scope.ServiceProvider.GetRequiredService<StudyStateManager>();
+
+            if (winnerID != null)
+                study.OnGameWon(winnerID.Value);
+            else
+                Console.WriteLine($"[Study] Game {ID} was a tie; replaying {study.CurrentState}.");
+
+            _restartAfterGameOver = !study.IsComplete;
+        }
+
+        /// <summary>The player with the strictly highest score, or null if the top score is tied (or nobody has a score).</summary>
+        int? GetWinner()
+        {
+            var ranked = GameState.Scores.OrderByDescending(s => s.Value).ToList();
+            if (ranked.Count == 0 || (ranked.Count > 1 && ranked[0].Value == ranked[1].Value))
+                return null;
+            return ranked[0].Key;
+        }
+
+        /// <summary>
+        /// Once the game has been over for <see cref="_pauseAfterGameOverSeconds"/> (and the study is not complete), starts the next
+        /// game in the same place: both scores back to 0, round 1, the goals their players' colors again. The cube on the board stays.
+        /// </summary>
+        void RestartAfterGameOver()
+        {
+            if (!_restartAfterGameOver || ServerTime - _gameOverTime < _pauseAfterGameOverSeconds)
+                return;
+
+            foreach (int playerID in GameState.Scores.Keys.ToList())
+                GameState.Scores[playerID] = 0;
+            GameState.Round = 1;
+            foreach (GoalCubeState goal in GameState.Goals.Values)
+                goal.Color = goal.PlayerID == Player1ID ? Player1GoalColor : Player2GoalColor;
+
+            _cubesInGoals.Clear();
+            _restartAfterGameOver = false;
+            _gameOver = false;
+
+            using var scope = _scopeFactory.CreateScope();
+            var study = scope.ServiceProvider.GetRequiredService<StudyStateManager>();
+            Console.WriteLine($"Game {ID} restarted for study condition {study.CurrentState}.");
         }
 
         #endregion Automatic Functions

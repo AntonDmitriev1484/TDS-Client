@@ -36,10 +36,17 @@ namespace Server.Handler
             var buffer = new byte[1024 * 4];
             WebSocketReceiveResult result;
 
+            // The study's added inbound latency. Each message is handled at its arrival time plus a delay drawn for it, but messages from
+            // this connection are still handled in the order they arrived (as over a slow TCP link): this is the latest scheduled one.
+            StudyStateManager studyStateManager;
+            Task inboundDelivery = Task.CompletedTask;
+
             try
             {
                 using (var scope = _scopeFactory.CreateScope())
                 {
+                    studyStateManager = scope.ServiceProvider.GetRequiredService<StudyStateManager>(); // A singleton, so it outlives the scope.
+
                     var gameConnectionManager = scope.ServiceProvider.GetRequiredService<GameConnectionManager>();
 
                     if (!gameConnectionManager.AddSocket(webSocket))
@@ -81,10 +88,21 @@ namespace Server.Handler
                             throw new JsonException("Message was null.");
                         }
 
-                        string typeString = (string)jsonMessage.type ?? null;
-                        var data = jsonMessage.data;
+                        // A missing type matches no handler, so the message is answered with "Data type is not supported."
+                        string typeString = (string)jsonMessage.type ?? string.Empty;
+                        object data = jsonMessage.data;
 
-                        await HandleInBoundMessage(webSocket, playerID, typeString, data);
+                        // Checked for every message, so a change of study condition takes effect right away.
+                        double delayMs = studyStateManager.DrawInboundLatencyMs();
+                        if (delayMs <= 0 && inboundDelivery.IsCompleted)
+                        {
+                            await HandleInBoundMessage(webSocket, playerID, typeString, data);
+                        }
+                        else
+                        {
+                            long dueMs = Environment.TickCount64 + (long)delayMs;
+                            inboundDelivery = HandleInBoundMessageLaterAsync(inboundDelivery, dueMs, webSocket, playerID, typeString, data);
+                        }
                     }
                     catch (JsonException ex)
                     {
@@ -134,6 +152,36 @@ namespace Server.Handler
                     sendLock.Release();
                 }
                 webSocket.Dispose();
+            }
+        }
+
+        /// <summary>
+        /// Handle a message once <paramref name="previous"/> (the connection's previously received message) has been handled and the clock has
+        /// reached <paramref name="dueMs"/> (<see cref="Environment.TickCount64"/>). Never throws, so a failure does not hold up later messages.
+        /// </summary>
+        private async Task HandleInBoundMessageLaterAsync(Task previous, long dueMs, WebSocket webSocket, int playerID, string typeString, object data)
+        {
+            try
+            {
+                await previous;
+            }
+            catch
+            {
+                // Already logged by the message it belongs to.
+            }
+
+            long waitMs = dueMs - Environment.TickCount64;
+            if (waitMs > 0)
+                await Task.Delay(TimeSpan.FromMilliseconds(waitMs));
+
+            try
+            {
+                await HandleInBoundMessage(webSocket, playerID, typeString, data);
+            }
+            catch (Exception ex)
+            {
+                // The connection may have closed while the message was held back.
+                Console.Error.WriteLine($"Failed to handle a delayed message from player {playerID}: {ex.Message}");
             }
         }
 

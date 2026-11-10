@@ -24,6 +24,7 @@ namespace Server
             builder.Services.AddSingleton<GameCoordinator>();
             builder.Services.AddSingleton<SpatialSyncConnectionManager>();
             builder.Services.AddSingleton<SpatialSyncCoordinator>();
+            builder.Services.AddSingleton<StudyStateManager>();
 
             // Read the URL from appsettings.json
             string webServerUrl = builder.Configuration["WebServer:Url"] ?? "https://localhost:5000";
