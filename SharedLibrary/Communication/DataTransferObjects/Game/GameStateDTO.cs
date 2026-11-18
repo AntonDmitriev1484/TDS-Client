@@ -20,13 +20,15 @@ namespace SharedLibrary.Communication.DataTransferObjects.Game
         public BoardState Board;
         /// <summary>Each player's view drift, (drift_rot degrees, drift_trans meters); see <see cref="GameState.DriftError"/>.</summary>
         public Dictionary<int, (float, float)> DriftError = new Dictionary<int, (float, float)>();
+        /// <summary>The receiving player's own study metrics (latency, spatial inconsistency) from the server's latest tick; null if none were sent.</summary>
+        public Metrics Metrics;
 
         /// <summary>
         /// Parameterless constructor for JSON deserialization between server and client.
         /// </summary>
         public GameStateDTO() { }
 
-        public GameStateDTO(double serverTime, Dictionary<int, long> playerLogicalTimestamps, GameState gameState)
+        public GameStateDTO(double serverTime, Dictionary<int, long> playerLogicalTimestamps, GameState gameState, Metrics metrics = null)
         {
             ServerTime = serverTime;
             PlayerLogicalTimestamps = new Dictionary<int, long>(playerLogicalTimestamps);
@@ -40,6 +42,7 @@ namespace SharedLibrary.Communication.DataTransferObjects.Game
                 Goals.Add(kvp.Key, kvp.Value.GetDeepCopy());
             Board = gameState.Board?.GetDeepCopy();
             DriftError = new Dictionary<int, (float, float)>(gameState.DriftError);
+            Metrics = metrics?.GetDeepCopy();
         }
     }
 }

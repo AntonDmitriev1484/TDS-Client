@@ -30,6 +30,15 @@ namespace SharedLibrary.Game
         public double PoseLastUpdatedServerTime; // The last time the pose was updated in server time.
         public double GrabLastUpdatedServerTime; // The last time the grab permissions was updated in server time.
 
+        /// <summary>
+        /// Where the holder keeps the cube relative to the hand that holds it (from the <see cref="GrabCubeAction"/> that was granted).
+        /// Only meaningful while the cube is held and <see cref="HasGrabFollowPose"/>.
+        /// </summary>
+        public Pose GrabFollowPose;
+
+        /// <summary>Whether <see cref="GrabFollowPose"/> is set: the grab that holds the cube came with an offset.</summary>
+        public bool HasGrabFollowPose;
+
         public Pose Pose;
 
         /// <summary>Edge length of the cube (meters).</summary>
@@ -108,6 +117,8 @@ namespace SharedLibrary.Game
                 Pose = Pose,
                 CubeSize = CubeSize,
                 GridLocation = GridLocation,
+                GrabFollowPose = GrabFollowPose,
+                HasGrabFollowPose = HasGrabFollowPose,
                 GrabPermissions = new Dictionary<int, CubeFollowTarget>(GrabPermissions),
             };
         }

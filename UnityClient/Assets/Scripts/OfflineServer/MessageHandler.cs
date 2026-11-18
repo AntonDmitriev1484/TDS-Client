@@ -1,3 +1,4 @@
+using Client.Utilities;
 using Client.Communication.Config;
 using SharedLibrary.Communication.DataTransferObjects;
 using SharedLibrary.Communication.DataTransferObjects.Game;
@@ -121,7 +122,7 @@ public class MessageHandler : MonoBehaviour
         _listening = true;
         _acceptThread = new Thread(AcceptLoop) { IsBackground = true, Name = "MessageHandler accept" };
         _acceptThread.Start();
-        Debug.Log($"{nameof(MessageHandler)}: listening for players on TCP port {_port}.");
+        DebugLog.Log($"{nameof(MessageHandler)}: listening for players on TCP port {_port}.");
     }
 
     void LoadConfigFromStreamingAssets()
@@ -131,7 +132,7 @@ public class MessageHandler : MonoBehaviour
             string configPath = Path.Combine(Application.streamingAssetsPath, "serverconfig.json");
             if (!File.Exists(configPath))
             {
-                Debug.Log($"{nameof(MessageHandler)}: no config file at {configPath}; using serialized values.");
+                DebugLog.Log($"{nameof(MessageHandler)}: no config file at {configPath}; using serialized values.");
                 return;
             }
 
@@ -154,7 +155,7 @@ public class MessageHandler : MonoBehaviour
             if (cfg.Port != 0)
                 _port = cfg.Port;
 
-            Debug.Log($"{nameof(MessageHandler)}: loaded config from {configPath} -> host={_host}, port={_port}");
+            DebugLog.Log($"{nameof(MessageHandler)}: loaded config from {configPath} -> host={_host}, port={_port}");
         }
         catch (Exception ex)
         {
@@ -266,7 +267,7 @@ public class MessageHandler : MonoBehaviour
             return;
 
         _connectionsByPlayerID.Remove(playerID);
-        Debug.Log($"{nameof(MessageHandler)}: player {playerID} disconnected.");
+        DebugLog.Log($"{nameof(MessageHandler)}: player {playerID} disconnected.");
 
         _gameStateManager.OnPlayerDisconnected(playerID);
     }

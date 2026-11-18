@@ -38,14 +38,14 @@ namespace Server.Handler
 
             // The study's added inbound latency. Each message is handled at its arrival time plus a delay drawn for it, but messages from
             // this connection are still handled in the order they arrived (as over a slow TCP link): this is the latest scheduled one.
-            StudyStateManager studyStateManager;
+            MetricLoggerManager metricLoggerManager;
             Task inboundDelivery = Task.CompletedTask;
 
             try
             {
                 using (var scope = _scopeFactory.CreateScope())
                 {
-                    studyStateManager = scope.ServiceProvider.GetRequiredService<StudyStateManager>(); // A singleton, so it outlives the scope.
+                    metricLoggerManager = scope.ServiceProvider.GetRequiredService<MetricLoggerManager>(); // A singleton, so it outlives the scope.
 
                     var gameConnectionManager = scope.ServiceProvider.GetRequiredService<GameConnectionManager>();
 
@@ -79,8 +79,6 @@ namespace Server.Handler
 
                     try
                     {
-                        Console.WriteLine(message + "\n\n");
-
                         var jsonMessage = JsonUtilities.FromJson<dynamic>(message);
 
                         if (jsonMessage == null)
@@ -92,8 +90,15 @@ namespace Server.Handler
                         string typeString = (string)jsonMessage.type ?? string.Empty;
                         object data = jsonMessage.data;
 
-                        // Checked for every message, so a change of study condition takes effect right away.
-                        double delayMs = studyStateManager.DrawInboundLatencyMs();
+                        // Every message is echoed to the console except the client's once-a-second latency (ping) reports.
+                        if (typeString != typeof(LatencyReportDTO).Name)
+                            Console.WriteLine(message + "\n\n");
+
+                        // Checked for every message, so a change of study condition takes effect right away. The condition is the one of the
+                        // game the player is in; before they are in a game (while queuing) nothing is added.
+                        double delayMs = GetStudyForPlayer(playerID)?.DrawInboundLatencyMs() ?? 0;
+                        // The metrics need the latency the study adds for each player.
+                        metricLoggerManager.RecordEmulatedLatency(playerID, delayMs);
                         if (delayMs <= 0 && inboundDelivery.IsCompleted)
                         {
                             await HandleInBoundMessage(webSocket, playerID, typeString, data);
@@ -153,6 +158,15 @@ namespace Server.Handler
                 }
                 webSocket.Dispose();
             }
+        }
+
+        /// <summary>
+        /// The study of the game the player is in, or null if they are not in a game yet.
+        /// </summary>
+        private StudyStateManager? GetStudyForPlayer(int playerID)
+        {
+            using var scope = _scopeFactory.CreateScope();
+            return scope.ServiceProvider.GetRequiredService<GameCoordinator>().GetGameByPlayerID(playerID)?.Study;
         }
 
         /// <summary>
@@ -226,6 +240,20 @@ namespace Server.Handler
                     }
 
                     await ProcessDequeueAsync(webSocket, playerID, dequeueDTO);
+                }
+                else if (typeString == typeof(LatencyReportDTO).Name)
+                {
+                    LatencyReportDTO latencyReportDTO = data.ToObject<LatencyReportDTO>();
+
+                    if (latencyReportDTO.PlayerID != playerID)
+                    {
+                        await this.SendObjectAsync(webSocket, new ResponseDTO(false, "DTO's player ID does not match the web socket's player ID."));
+                        return;
+                    }
+
+                    // The client's own latency estimate, for the study's metrics. Sent about once a second, so it is not answered.
+                    using (var scope = _scopeFactory.CreateScope())
+                        scope.ServiceProvider.GetRequiredService<MetricLoggerManager>().RecordEstimatedLatency(playerID, latencyReportDTO.EstimatedLatencySeconds);
                 }
                 else if (typeString == typeof(SingleActionDTO).Name)
                 {

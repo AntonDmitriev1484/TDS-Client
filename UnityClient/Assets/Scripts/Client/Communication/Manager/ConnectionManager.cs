@@ -646,13 +646,35 @@ namespace Client.Communication.Manager
         {
             while (IsConnected[connectionType] && webSocket != null && webSocket.IsAlive)
             {
-                Stopwatch stopwatch = Stopwatch.StartNew();
-                bool pingSucceeded = webSocket.Ping();
-                stopwatch.Stop();
-
-                if (pingSucceeded)
+                // WebSocket.Ping blocks until the pong arrives (or it times out), so it runs on a thread-pool thread: waiting for it here
+                // would freeze rendering for a whole round trip every time. The round trip is timed on that thread, so polling for the
+                // result once a frame does not add to it. The next ping only starts after this one is done, so they never overlap.
+                Task<double> pingTask = Task.Run(() =>
                 {
-                    RttTotalsMilliseconds[connectionType] += stopwatch.Elapsed.TotalMilliseconds;
+                    try
+                    {
+                        Stopwatch stopwatch = Stopwatch.StartNew();
+                        bool pingSucceeded = webSocket.Ping();
+                        stopwatch.Stop();
+
+                        return pingSucceeded ? stopwatch.Elapsed.TotalMilliseconds : -1d;
+                    }
+                    catch (Exception)
+                    {
+                        // The socket closed or failed during the ping: a missed sample, not an error.
+                        return -1d;
+                    }
+                });
+
+                while (!pingTask.IsCompleted)
+                    yield return null;
+
+                double rttMilliseconds = pingTask.Result; // -1 if the ping failed
+
+                // The results are only written here, on the main thread, as before.
+                if (rttMilliseconds >= 0d)
+                {
+                    RttTotalsMilliseconds[connectionType] += rttMilliseconds;
                     RttSampleCounts[connectionType]++;
 
                     double averageRttMilliseconds = RttTotalsMilliseconds[connectionType] /
@@ -949,7 +971,7 @@ namespace Client.Communication.Manager
                             Data = data
                         };
 
-                        return await SendObject(webSocket, message);
+                        return await EnqueueSend(connectionType, webSocket, message);
                     }
                     catch (JsonException ex)
                     {
@@ -970,25 +992,73 @@ namespace Client.Communication.Manager
         }
 
         /// <summary>
-        /// Send a JSON Serializable Object asynchronously.
+        /// Queues a message for the connection's sender thread. JSON serialization and the socket write both happen there, so the
+        /// calling (usually main) thread only pays for an enqueue. Messages on one connection are sent in the order they were queued.
+        /// The message must not be modified after this call, since it is serialized later on another thread.
         /// </summary>
-        /// <param name="webSocket">The web socket to send the object through.</param>
-        /// <param name="obj">The object to send through.</param>
-        /// <returns></returns>
-        private async Task<bool> SendObject(WebSocket webSocket, object obj)
+        /// <returns>A task that completes with true once the message was written to the socket, or false if serialization or the send failed.</returns>
+        private Task<bool> EnqueueSend(ConnectionType connectionType, WebSocket webSocket, object message)
         {
-            try
+            OutboundSender sender;
+            lock (_outboundSenders)
             {
-                string jsonObj = JsonUtilities.ToJson(obj);
-
-                await Task.Run(() => webSocket.Send(jsonObj));
-                return true; // If no exception is thrown, the send was successful
+                if (!_outboundSenders.TryGetValue(connectionType, out sender))
+                {
+                    sender = new OutboundSender(connectionType.ToString());
+                    _outboundSenders.Add(connectionType, sender);
+                }
             }
-            catch (Exception ex)
+
+            return sender.Enqueue(webSocket, message);
+        }
+
+        private readonly Dictionary<ConnectionType, OutboundSender> _outboundSenders = new Dictionary<ConnectionType, OutboundSender>();
+
+        /// <summary>
+        /// Single background thread that serializes and sends queued messages in order for one connection.
+        /// </summary>
+        private sealed class OutboundSender
+        {
+            private readonly System.Collections.Concurrent.BlockingCollection<Job> _queue = new System.Collections.Concurrent.BlockingCollection<Job>();
+            private readonly string _name;
+
+            private struct Job
             {
-                // Log the exception or handle it as needed
-                Debug.LogError($"Error sending message: {ex.Message}");
-                return false; // An exception indicates the send failed
+                public WebSocket Socket;
+                public object Message;
+                public TaskCompletionSource<bool> Result;
+            }
+
+            public OutboundSender(string name)
+            {
+                _name = name;
+                new Thread(Run) { IsBackground = true, Name = $"{name} outbound sender" }.Start();
+            }
+
+            public Task<bool> Enqueue(WebSocket socket, object message)
+            {
+                var result = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+                _queue.Add(new Job { Socket = socket, Message = message, Result = result });
+                return result.Task;
+            }
+
+            private void Run()
+            {
+                foreach (Job job in _queue.GetConsumingEnumerable())
+                {
+                    try
+                    {
+                        string json = JsonUtilities.ToJson(job.Message);
+                        job.Socket.Send(json);
+                        job.Result.TrySetResult(true);
+                    }
+                    catch (Exception ex)
+                    {
+                        string error = ex.Message;
+                        MainThreadDispatcher.Enqueue(() => Debug.LogError($"Error sending {_name} message: {error}"));
+                        job.Result.TrySetResult(false);
+                    }
+                }
             }
         }
 

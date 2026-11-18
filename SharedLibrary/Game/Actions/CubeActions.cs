@@ -5,12 +5,24 @@ namespace SharedLibrary.Game.Actions
 {
     /// <summary>
     /// Requests grab permission for a cube. Granted only if no other player holds it.
+    /// The action also carries where the cube sits relative to the hand that grabs it (<see cref="FollowPose"/>), worked out once when the
+    /// player pinched. Everywhere the action is applied (including when a client replays it on top of a newer server state) the cube is
+    /// held at that same offset, instead of working it out again from wherever the cube and hand happen to be by then.
     /// </summary>
     [Serializable]
     public class GrabCubeAction : CubeAction
     {
         public override SingleActionType SingleActionType => SingleActionType.GrabCube;
         public CubeFollowTarget FollowTarget;
+
+        /// <summary>
+        /// The cube's pose in the space of the hand that grabs it (<see cref="FollowTarget"/>), at the moment of the grab: the position and
+        /// rotation it keeps relative to the hand while held. Only meaningful if <see cref="HasFollowPose"/>.
+        /// </summary>
+        public Pose FollowPose;
+
+        /// <summary>Whether <see cref="FollowPose"/> was set. False for a grab made without one, whose offset the client works out itself.</summary>
+        public bool HasFollowPose;
 
         public GrabCubeAction() { }
 
@@ -22,6 +34,14 @@ namespace SharedLibrary.Game.Actions
             }
 
             FollowTarget = cubeFollowTarget;
+        }
+
+        /// <param name="followPose">The cube's pose relative to the grabbing hand at the moment of the grab.</param>
+        public GrabCubeAction(int playerID, double serverTime, string cubeID, CubeFollowTarget cubeFollowTarget, Pose followPose)
+            : this(playerID, serverTime, cubeID, cubeFollowTarget)
+        {
+            FollowPose = followPose;
+            HasFollowPose = true;
         }
     }
 

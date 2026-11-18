@@ -1,3 +1,4 @@
+using Client.Utilities;
 using Assets.Scripts.Utilities;
 using Client.Scene.Manager;
 using SharedLibrary.Communication.DataTransferObjects.Game;
@@ -417,7 +418,7 @@ public class OfflineGameStateManager : MonoBehaviour
 
                     if (!successfulAction)
                     {
-                        Debug.Log($"{nameof(OfflineGameStateManager)}: rejected {queuedAction.Action.FormatActionText()} ({queuedAction.ClientLogicalTimestamp})");
+                        DebugLog.Log($"{nameof(OfflineGameStateManager)}: rejected {queuedAction.Action.FormatActionText()} ({queuedAction.ClientLogicalTimestamp})");
                     }
                 }
             }
@@ -514,7 +515,7 @@ public class OfflineGameStateManager : MonoBehaviour
         CubeState newCube = CreateCubeOnBoard();
         GameState.ServerAddCube(newCube);
 
-        Debug.Log($"{nameof(OfflineGameStateManager)}: player {scoreAction.PlayerID} scored with {scoreAction.CubeID} " +
+        DebugLog.Log($"{nameof(OfflineGameStateManager)}: player {scoreAction.PlayerID} scored with {scoreAction.CubeID} " +
             $"(score {GameState.Scores[scoreAction.PlayerID]}); round {GameState.Round}, spawned {newCube.ID} at grid {newCube.GridLocation}.");
 
         return true;
@@ -533,7 +534,7 @@ public class OfflineGameStateManager : MonoBehaviour
         foreach (GoalCubeState goal in GameState.Goals.Values)
             goal.Color = GameOverGoalColor;
 
-        Debug.Log($"{nameof(OfflineGameStateManager)}: game over after round {_maxRounds}.");
+        DebugLog.Log($"{nameof(OfflineGameStateManager)}: game over after round {_maxRounds}.");
     }
 
     #endregion Automatic Functions

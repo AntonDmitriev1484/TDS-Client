@@ -21,6 +21,9 @@ namespace Server.Manager.Game
 
         public int ID { get; set; }
 
+        /// <summary>This game's study: which condition it is in, and the latency and drift the condition adds.</summary>
+        public StudyStateManager Study { get; }
+
         // How far away to spawn from the initial players (meters).
         float _spawnDistance = 1.0f;
         // Empty space between the two starting cubes (meters).
@@ -107,14 +110,23 @@ namespace Server.Manager.Game
             public SingleAction Action { get; }
             public long ClientLogicalTimestamp { get; }
             public int PlayerID { get; }
+            /// <summary>When the action reached this game (server time, seconds), after any emulated inbound delay.</summary>
+            public double ArrivalTime { get; }
 
-            public QueuedAction(SingleAction action, long clientLogicalTimestamp, int playerID)
+            public QueuedAction(SingleAction action, long clientLogicalTimestamp, int playerID, double arrivalTime)
             {
                 Action = action;
                 ClientLogicalTimestamp = clientLogicalTimestamp;
                 PlayerID = playerID;
+                ArrivalTime = arrivalTime;
             }
         }
+
+        // The study's metrics: the logger (a singleton), and this game session's file and cube position history.
+        private readonly MetricLoggerManager _metricLogger;
+        private readonly MetricSession _metricSession;
+        // The number of server ticks so far.
+        private long _tickNumber;
 
         #endregion Properties
 
@@ -131,6 +143,14 @@ namespace Server.Manager.Game
         public ServerGameStateManager(IServiceScopeFactory scopeFactory, ServerSettings serverSettings, List<int> playerIDs, BoardLayout? layout = null)
         {
             _scopeFactory = scopeFactory;
+
+            using (var scope = scopeFactory.CreateScope())
+                _metricLogger = scope.ServiceProvider.GetRequiredService<MetricLoggerManager>(); // A singleton, so it outlives the scope.
+
+            // Each game has its own study, starting at the first condition.
+            Study = new StudyStateManager();
+            _metricSession = _metricLogger.StartSession(Study);
+
             GameState = new GameState(isAuthoritative: true);
             PlayerLogicalTimestamps = new Dictionary<int, long>();
             InitializeGame(playerIDs, layout ?? BoardLayout.Default);
@@ -185,11 +205,18 @@ namespace Server.Manager.Game
             GameState.ServerInitialize(playerIDs, cubes, board, goals);
             GameState.ServerAddCube(CreateCubeOnBoard());
 
-            using (var scope = _scopeFactory.CreateScope())
-                SetDriftError(scope.ServiceProvider.GetRequiredService<StudyStateManager>());
+            SetDriftError(Study);
 
             BroadcastGameState();
         }
+
+        /// <summary>
+        /// The SLAM drift that was just added to a player's global pose (<paramref name="driftedPose"/> is <paramref name="truePose"/> with the
+        /// drift on it), sent to them at <paramref name="sendTime"/> (server time). The metric logger keeps these to work out where the player
+        /// saw things.
+        /// </summary>
+        public void RecordDrift(int playerID, double sendTime, Pose truePose, Pose driftedPose) =>
+            _metricLogger.RecordDrift(_metricSession, playerID, sendTime, truePose, driftedPose);
 
         StudyState? _driftErrorState; // The study state DriftError was last set for, so the change can be logged once.
 
@@ -283,7 +310,7 @@ namespace Server.Manager.Game
                 PlayerLogicalTimestamps.Add(playerID, 0);
 
             if (GameState != null)
-                this.AddOutgoingDTO(playerID, new GameStateDTO(ServerTime, PlayerLogicalTimestamps, GameState));
+                this.AddOutgoingDTO(playerID, CreateGameStateDTO(playerID));
         }
 
         /// <summary>
@@ -326,7 +353,7 @@ namespace Server.Manager.Game
             }
 
             var queue = _actionQueues.GetOrAdd(key, _ => new ConcurrentQueue<QueuedAction>());
-            queue.Enqueue(new QueuedAction(action, clientLogicalTimestamp, playerID));
+            queue.Enqueue(new QueuedAction(action, clientLogicalTimestamp, playerID, TimeUtilities.GetTime()));
         }
 
         /// <summary>
@@ -345,6 +372,11 @@ namespace Server.Manager.Game
             {
                 while (!token.IsCancellationRequested)
                 {
+                    _tickNumber++;
+
+                    // The cube moves handled this tick (accepted or rejected), for the metrics.
+                    var poseUpdates = new List<CubePoseUpdate>();
+
                     // First: drain per-object queues into temporary lists so new incoming messages are not processed this tick.
                     var queuesSnapshot = new List<KeyValuePair<string, List<QueuedAction>>>();
 
@@ -378,6 +410,11 @@ namespace Server.Manager.Game
                             // Apply the action to the authoritative GameState.
                             bool successfulAction = GameState.HandleSingleAction(queuedAction.Action);
 
+                            // Every move goes to the metrics, accepted or not: a player whose move lost a conflict still saw their cube move
+                            // on their own screen until the server's state corrected it.
+                            if (queuedAction.Action is MoveCubeAction moveCubeAction)
+                                poseUpdates.Add(new CubePoseUpdate(moveCubeAction.CubeID, queuedAction.PlayerID, queuedAction.ArrivalTime, moveCubeAction.Pose.Position, successfulAction));
+
                             // TODO: handle action failures, logging, and generating per-player responses or broadcasts.
                             // Acknowledge the action whether or not it is accepted, so the client stops replaying it.
                             if (PlayerLogicalTimestamps.TryGetValue(queuedAction.PlayerID, out long latest) && latest < queuedAction.ClientLogicalTimestamp)
@@ -407,8 +444,17 @@ namespace Server.Manager.Game
                     }
 
                     // Keep the drift in step with the study state, whatever changed it.
-                    using (var scope = _scopeFactory.CreateScope())
-                        SetDriftError(scope.ServiceProvider.GetRequiredService<StudyStateManager>());
+                    SetDriftError(Study);
+
+                    // Measure this tick's metrics (latency and spatial inconsistency per client) and log them.
+                    try
+                    {
+                        _metricLogger.LogTick(_metricSession, ID, _tickNumber, ServerTime, GameState, poseUpdates);
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.Error.WriteLine($"Failed to log metrics for tick {_tickNumber}: {ex}");
+                    }
 
                     // Broadcast the updated state to all players
                     BroadcastGameState();
@@ -446,6 +492,7 @@ namespace Server.Manager.Game
                 _stateSyncCts.Dispose();
                 _stateSyncCts = null;
                 _stateSyncTask = null;
+                _metricLogger.EndSession(_metricSession);
             }
         }
 
@@ -539,15 +586,13 @@ namespace Server.Manager.Game
                 string.Join(", ", GameState.Scores.OrderBy(s => s.Key).Select(s => $"player {s.Key}: {s.Value}")));
 
             int? winnerID = GetWinner();
-            using var scope = _scopeFactory.CreateScope();
-            var study = scope.ServiceProvider.GetRequiredService<StudyStateManager>();
 
             if (winnerID != null)
-                study.OnGameWon(winnerID.Value);
+                Study.OnGameWon(winnerID.Value);
             else
-                Console.WriteLine($"[Study] Game {ID} was a tie; replaying {study.CurrentState}.");
+                Console.WriteLine($"[Study] Game {ID} was a tie; replaying {Study.CurrentState}.");
 
-            _restartAfterGameOver = !study.IsComplete;
+            _restartAfterGameOver = !Study.IsComplete;
         }
 
         /// <summary>The player with the strictly highest score, or null if the top score is tied (or nobody has a score).</summary>
@@ -578,9 +623,7 @@ namespace Server.Manager.Game
             _restartAfterGameOver = false;
             _gameOver = false;
 
-            using var scope = _scopeFactory.CreateScope();
-            var study = scope.ServiceProvider.GetRequiredService<StudyStateManager>();
-            Console.WriteLine($"Game {ID} restarted for study condition {study.CurrentState}.");
+            Console.WriteLine($"Game {ID} restarted for study condition {Study.CurrentState}.");
         }
 
         #endregion Automatic Functions
@@ -608,8 +651,12 @@ namespace Server.Manager.Game
             }
 
             foreach (int playerID in GameState.PlayerIDs)
-                this.AddOutgoingDTO(playerID, new GameStateDTO(ServerTime, PlayerLogicalTimestamps, GameState));
+                this.AddOutgoingDTO(playerID, CreateGameStateDTO(playerID));
         }
+
+        /// <summary>A snapshot of the game state for one player, with that player's own metrics from the latest logged tick.</summary>
+        private GameStateDTO CreateGameStateDTO(int playerID) =>
+            new GameStateDTO(ServerTime, PlayerLogicalTimestamps, GameState, _metricSession.GetLatest(playerID));
 
         public async Task<bool> AddOutgoingDTO(int playerID, object obj)
         {

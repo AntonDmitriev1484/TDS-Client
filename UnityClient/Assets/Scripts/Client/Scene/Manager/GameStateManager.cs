@@ -1,5 +1,6 @@
 using Assets.Scripts.Utilities;
 using Client.Communication.Manager;
+using Client.Utilities;
 using SharedLibrary.Communication.Connection;
 using SharedLibrary.Communication.DataTransferObjects.Game;
 using SharedLibrary.Game;
@@ -40,11 +41,13 @@ namespace Client.Scene.Manager
 
         [SerializeField] GrabbableCubeManager _cubeManager;
         [SerializeField] GameBoardView _boardView;
+        [Tooltip("Shows this player's latency and spatial inconsistency from the server in front of the head. Created automatically if missing.")]
+        [SerializeField] MetricsHud _metricsHud;
         [SerializeField] OVRHand _rightHand;
         [SerializeField] OVRHand _leftHand;
 
         [Tooltip("Minimum seconds between pose updates sent for a cube we are holding.")]
-        [SerializeField] float _poseSendInterval = 0.05f;
+        [SerializeField] float _poseSendInterval = 0.033f;
 
         [Tooltip("A held cube must move or turn at least this much before a new pose is sent (meters / degrees).")]
         [SerializeField] float _poseSendThreshold = 0.001f;
@@ -72,6 +75,10 @@ namespace Client.Scene.Manager
         // Estimated latency between the client and server.
         float _estimatedLatency => Mathf.Max(0f, ConnectionManager.Instance.GetConnectionLatency(ConnectionType.Game));
         float _estimatedRoundTripTime => _estimatedLatency * 2f;
+
+        // How often (seconds) to tell the server our estimated latency. The server can't measure it, and logs it for the study's metrics.
+        const float LatencyReportIntervalSeconds = 1f;
+        float _nextLatencyReportTime;
         double _estimatedServerTime => GameState.CurrentAppliedOffset + TimeUtilities.GetTime();
 
         // The actual gamestate, as rendered for the user.
@@ -144,6 +151,10 @@ namespace Client.Scene.Manager
                 _boardView = GetComponent<GameBoardView>();
             if (_boardView == null)
                 _boardView = gameObject.AddComponent<GameBoardView>();
+            if (_metricsHud == null)
+                _metricsHud = GetComponent<MetricsHud>();
+            if (_metricsHud == null)
+                _metricsHud = gameObject.AddComponent<MetricsHud>();
 
             foreach (OVRHand hand in FindObjectsByType<OVRHand>(FindObjectsSortMode.None))
             {
@@ -218,6 +229,32 @@ namespace Client.Scene.Manager
                 HandleCubeUpdated(cubeState);
             }
 
+            ReportEstimatedLatency();
+        }
+
+        /// <summary>
+        /// Every <see cref="LatencyReportIntervalSeconds"/>, sends the server our estimated one-way latency (from the ping measurements
+        /// in <see cref="ConnectionManager"/>). Nothing is sent in local test mode, which has no real server, or before a measurement exists.
+        /// </summary>
+        void ReportEstimatedLatency()
+        {
+            if (!IsInitialized || Time.unscaledTime < _nextLatencyReportTime)
+                return;
+
+            ConnectionManager cm = ConnectionManager.Instance;
+            if (cm == null || cm.IsLocalTest)
+                return;
+
+            _nextLatencyReportTime = Time.unscaledTime + LatencyReportIntervalSeconds;
+
+            if (!cm.IsConnected.TryGetValue(ConnectionType.Game, out bool connected) || !connected)
+                return;
+
+            float latency = _estimatedLatency;
+            if (latency <= 0f)
+                return;
+
+            _ = cm.SendDTO(ConnectionType.Game, new LatencyReportDTO(LocalPlayerID, latency));
         }
 
         void LateUpdate()
@@ -259,6 +296,10 @@ namespace Client.Scene.Manager
                 ApplyingPredictedState();
                 _boardView.Apply(GameState.Board, GameState.Goals.Values, GameState.Scores);
 
+                // This player's own latency and spatial inconsistency, measured by the server.
+                if (_metricsHud != null)
+                    _metricsHud.SetMetrics(gameStateDTO.Metrics);
+
                 // This player's view drift; no entry means none.
                 if (SpatialSyncManager.Instance != null)
                 {
@@ -282,18 +323,22 @@ namespace Client.Scene.Manager
         {
             GameState.ReplaceFrom(_authoritativeGameState);
 
-            string cubeStateString = "";
-            foreach (CubeState cubeState in _authoritativeGameState.Cubes.Values.ToList())
+            // Built only for the log, so it is skipped unless debug mode is on.
+            if (DebugLog.Enabled)
             {
-                cubeStateString += $"ID: {cubeState.ID}; permissions: ";
-                foreach (int ID in cubeState.GrabPermissions.Keys)
+                string cubeStateString = "";
+                foreach (CubeState cubeState in _authoritativeGameState.Cubes.Values.ToList())
                 {
-                    cubeStateString += $"PlayerID {ID} - {cubeState.GrabPermissions[ID]}, ";
+                    cubeStateString += $"ID: {cubeState.ID}; permissions: ";
+                    foreach (int ID in cubeState.GrabPermissions.Keys)
+                    {
+                        cubeStateString += $"PlayerID {ID} - {cubeState.GrabPermissions[ID]}, ";
+                    }
+                    cubeStateString += "\n";
                 }
-                cubeStateString += "\n";
-            }
 
-            Debug.Log($"Authoritative Game State:\n {cubeStateString}");
+                DebugLog.Log($"Authoritative Game State:\n {cubeStateString}");
+            }
 
             var allPending = _pendingActionsByCube.Values
                 .SelectMany(list => list)
@@ -336,10 +381,12 @@ namespace Client.Scene.Manager
             foreach (PendingAction completedAction in completedActions)
             {
                 RemovePendingAction(completedAction);
-                Debug.Log($"Removing completed action with client logical timestamp: {completedAction.ClientLogicalTimestamp} and type: {completedAction.Action.SingleActionType}.");
+                if (DebugLog.Enabled)
+                    DebugLog.Log($"Removing completed action with client logical timestamp: {completedAction.ClientLogicalTimestamp} and type: {completedAction.Action.SingleActionType}.");
             }
 
-            Debug.Log($"Pending actions has length: {remainingActionsLength}");
+            if (DebugLog.Enabled)
+                DebugLog.Log($"Pending actions has length: {remainingActionsLength}");
         }
 
         PendingAction FindPendingAction(long clientLogicalTimestamp)
@@ -425,19 +472,27 @@ namespace Client.Scene.Manager
             if (!_cubeManager.TryGetCube(cubeState.ID, out var cube))
                 return;
 
-            Debug.Log($"Updating cube: {JsonUtilities.ToJson(cubeState)}");
+            if (DebugLog.Enabled)
+                DebugLog.Log($"Updating cube: {JsonUtilities.ToJson(cubeState)}");
 
             // Appropriately set grab permissions.
             if (cubeState.HasGrabPermission(LocalPlayerID))
             {
                 // If our player is grabbing the block, then show it grabbing properly.
+                // The offset from the hand comes from the grab action (kept in the cube's state), so it is the same however often the
+                // grab is replayed; only a grab without one works it out from the current poses.
+                Transform hand = null;
                 if (cubeState.GrabPermissions[LocalPlayerID] == CubeFollowTarget.LeftHand && _leftHand != null)
-                {
-                    cube.Grab(_leftHand.transform);
-                }
+                    hand = _leftHand.transform;
                 else if (cubeState.GrabPermissions[LocalPlayerID] == CubeFollowTarget.RightHand && _rightHand != null)
+                    hand = _rightHand.transform;
+
+                if (hand != null)
                 {
-                    cube.Grab(_rightHand.transform);
+                    if (cubeState.HasGrabFollowPose)
+                        cube.Grab(hand, Conversions.ToUnityPosition(cubeState.GrabFollowPose), Conversions.ToUnityRotation(cubeState.GrabFollowPose));
+                    else
+                        cube.Grab(hand);
                 }
             }
 
@@ -471,7 +526,14 @@ namespace Client.Scene.Manager
                 followTarget = CubeFollowTarget.LeftHand;
             }
 
-            if (!HandleOurAction(new GrabCubeAction(LocalPlayerID, _estimatedServerTime, cube.Id, followTarget)))
+            // Where the cube sits relative to the hand right now: worked out once, here, and sent with the grab, so every later application
+            // of the action (including a replay on top of a newer server state) holds the cube at this same offset.
+            Transform handTransform = hand.transform;
+            Vector3 followLocalPosition = handTransform.InverseTransformPoint(cube.transform.position);
+            Quaternion followLocalRotation = Quaternion.Inverse(handTransform.rotation) * cube.transform.rotation;
+
+            if (!HandleOurAction(new GrabCubeAction(LocalPlayerID, _estimatedServerTime, cube.Id, followTarget,
+                    Conversions.ToSharedPose(followLocalPosition, followLocalRotation))))
             {
                 Debug.LogWarning($"Failed to grab cube {cube.Id} (possibly because we don't have permission).");
                 CubeState cubeState = this.GameState.Cubes[cube.Id];
@@ -549,7 +611,8 @@ namespace Client.Scene.Manager
                     // Fire-and-forget send; do not await on the network thread here.
                     _ = cm.SendDTO(ConnectionType.Game, dto);
 
-                    Debug.Log($"Sent SingleAction message with action type: {singleAction.SingleActionType} to server!");
+                    if (DebugLog.Enabled)
+                        DebugLog.Log($"Sent SingleAction message with action type: {singleAction.SingleActionType} to server!");
                 }
             }
             catch (Exception ex)

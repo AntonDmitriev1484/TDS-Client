@@ -1,3 +1,4 @@
+using Client.Utilities;
 using System.Collections;
 using System.IO;
 using UnityEngine;
@@ -13,6 +14,7 @@ namespace Client.Communication.Config
         public float reconnectDelay;
         public string username;
         public string password;
+        public bool debugMode;
     }
 
     /// <summary>Matches runconfig.json in the Unity project root.</summary>
@@ -47,6 +49,7 @@ namespace Client.Communication.Config
         private string username = "Chitty"; // Fallback default
         private string password = "ChittyPassword"; // Fallback default
         private RunMode runMode = RunMode.Remote; // Fallback default
+        private bool debugMode = false; // Fallback default
 
         public RunMode RunMode => runMode;
         public bool IsLocalTest => runMode == RunMode.LocalTest;
@@ -56,6 +59,7 @@ namespace Client.Communication.Config
         public float RetryDelay => retryDelay;
         public string Username => username;
         public string Password => password;
+        public bool DebugMode => debugMode;
 
 
         public static ServerConfig Instance { get; private set; }
@@ -93,9 +97,11 @@ namespace Client.Communication.Config
                         if (data.reconnectDelay != 0) retryDelay = data.reconnectDelay;
                         if (!string.IsNullOrEmpty(data.username)) username = data.username;
                         if (!string.IsNullOrEmpty(data.password)) password = data.password;
+                        if (!string.IsNullOrEmpty(data.debugMode.ToString())) debugMode = data.debugMode;
+                        DebugLog.Enabled = debugMode; // what DebugLog.Log (any thread) checks
 
                         serverUrl = $"https://{host}:{port}";
-                        Debug.Log($"[ServerConfig] Loaded config. URL: {serverUrl}");
+                        DebugLog.Log($"[ServerConfig] Loaded config. URL: {serverUrl}");
                     }
                     catch (System.Exception e)
                     {
@@ -153,7 +159,7 @@ namespace Client.Communication.Config
                         yield break;
                 }
 
-                Debug.Log($"[ServerConfig] Run mode: {runMode}.");
+                DebugLog.Log($"[ServerConfig] Run mode: {runMode}.");
             }
             catch (System.Exception e)
             {

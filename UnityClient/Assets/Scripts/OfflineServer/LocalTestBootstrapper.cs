@@ -1,3 +1,4 @@
+using Client.Utilities;
 using Client.Communication.Config;
 using System.Collections;
 using UnityEngine;
@@ -22,7 +23,7 @@ public class LocalTestBootstrapper : MonoBehaviour
 
         if (ServerConfig.Instance.IsLocalTest && FindFirstObjectByType<OfflineGameStateManager>() == null)
         {
-            Debug.Log($"{nameof(LocalTestBootstrapper)}: local test mode; starting the offline game server.");
+            DebugLog.Log($"{nameof(LocalTestBootstrapper)}: local test mode; starting the offline game server.");
             new GameObject("OfflineGameServer").AddComponent<OfflineGameStateManager>();
         }
 

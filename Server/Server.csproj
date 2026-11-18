@@ -30,4 +30,8 @@
     <ProjectReference Include="..\SharedLibrary\SharedLibrary.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <Folder Include="MetricLogs\" />
+  </ItemGroup>
+
 </Project>

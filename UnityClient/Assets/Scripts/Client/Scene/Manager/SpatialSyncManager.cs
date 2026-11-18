@@ -1,4 +1,5 @@
-﻿using Assets.Scripts.Utilities;
+﻿using Client.Utilities;
+using Assets.Scripts.Utilities;
 using Client.Communication.Manager;
 using SharedLibrary.Communication.Connection;
 using SharedLibrary.Communication.DataTransferObjects.SpatialSync;
@@ -168,7 +169,7 @@ namespace Client.Scene.Manager
             _receivedDriftRotationDegrees = rotationDegrees;
             _driftRotationDegrees = Random.value < 0.5f ? -rotationDegrees : rotationDegrees;
             _driftTranslationMeters = translationMeters;
-            Debug.Log($"[{nameof(SpatialSyncManager)}] View drift set to {_driftRotationDegrees:+0.0;-0.0;0} deg, {translationMeters:0.00} m.");
+            DebugLog.Log($"[{nameof(SpatialSyncManager)}] View drift set to {_driftRotationDegrees:+0.0;-0.0;0} deg, {translationMeters:0.00} m.");
         }
 
         /// <summary>

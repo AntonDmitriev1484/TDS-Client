@@ -150,6 +150,8 @@ namespace SharedLibrary.Game
                 cube.PoseLastUpdatedServerTime = incoming.PoseLastUpdatedServerTime;
                 cube.Pose = incoming.Pose;
                 cube.GrabPermissions = new Dictionary<int, CubeFollowTarget>(incoming.GrabPermissions);
+                cube.GrabFollowPose = incoming.GrabFollowPose;
+                cube.HasGrabFollowPose = incoming.HasGrabFollowPose;
 
                 // Permissions first, so a client that just lost a cube drops it before the pose is applied.
                 OnGrabPermissionsChanged.Invoke(cube);
@@ -193,6 +195,8 @@ namespace SharedLibrary.Game
                 cube.PoseLastUpdatedServerTime = authoritativeCube.PoseLastUpdatedServerTime;
                 cube.Pose = authoritativeCube.Pose;
                 cube.GrabPermissions = new Dictionary<int, CubeFollowTarget>(authoritativeCube.GrabPermissions);
+                cube.GrabFollowPose = authoritativeCube.GrabFollowPose;
+                cube.HasGrabFollowPose = authoritativeCube.HasGrabFollowPose;
                 OnGrabPermissionsChanged.Invoke(cube);
                 OnCubePoseChanged.Invoke(cube);
             }
@@ -284,6 +288,9 @@ namespace SharedLibrary.Game
             }
 
             cube.GrabPermissions[playerID] = grabCubeAction.FollowTarget;
+            // The offset comes from the action, so replaying the grab always gives the same one.
+            cube.GrabFollowPose = grabCubeAction.FollowPose;
+            cube.HasGrabFollowPose = grabCubeAction.HasFollowPose;
             cube.GrabLastUpdatedServerTime = grabCubeAction.ServerTime;
             OnGrabPermissionsChanged.Invoke(cube);
 
@@ -298,6 +305,7 @@ namespace SharedLibrary.Game
                 return false;
 
             cube.GrabPermissions[playerID] = CubeFollowTarget.None;
+            cube.HasGrabFollowPose = false;
             cube.GrabLastUpdatedServerTime = releaseCubeAction.ServerTime;
             OnGrabPermissionsChanged.Invoke(cube);
 
@@ -335,6 +343,7 @@ namespace SharedLibrary.Game
 
             foreach (int playerID in new List<int>(cube.GrabPermissions.Keys))
                 cube.GrabPermissions[playerID] = CubeFollowTarget.None;
+            cube.HasGrabFollowPose = false;
 
             OnGrabPermissionsChanged.Invoke(cube);
 

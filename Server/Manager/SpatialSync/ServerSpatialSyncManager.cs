@@ -1,4 +1,5 @@
 ﻿using Server.Handler;
+using Server.Manager.Game;
 using Server.Utilities;
 using SharedLibrary.Communication.DataTransferObjects.SpatialSync;
 using System.Collections.Concurrent;
@@ -204,13 +205,40 @@ namespace Server.Manager.SpatialSync
                             {
                                 // Take the player's spatial anchor poses into the global map; this returns the global pose of the pose they sent
                                 // (null until the player is placed in the global map).
-                                SharedLibrary.Game.Actions.Pose? globalPose = GlobalMappingManager.HandleNewKeyFrame(playerID, keyFrameDTO);
+                                SharedLibrary.Game.Actions.Pose? globalPoseNullable = GlobalMappingManager.HandleNewKeyFrame(playerID, keyFrameDTO);
                                 SharedLibrary.Game.Actions.Pose cameraLocalPose = keyFrameDTO.CameraLocalPose;
+                                SyncResponseDTO syncResponseDTO;
 
-                                // Tell the player: with the global pose if the global map is ready for them, without it if not.
-                                SyncResponseDTO syncResponseDTO = globalPose.HasValue
-                                    ? new SyncResponseDTO(keyFrameDTO.ID, cameraLocalPose, globalPose.Value)
-                                    : new SyncResponseDTO(keyFrameDTO.ID, cameraLocalPose);
+                                // TODO: Add the pose error to global pose, if it exists.
+                                if (globalPoseNullable != null)
+                                {
+                                    SharedLibrary.Game.Actions.Pose globalPose = globalPoseNullable.Value;
+
+                                    using (var scope = _scopeFactory.CreateScope())
+                                    {
+                                        // The drift belongs to the study of the game the player is in; before they are in a game there is none.
+                                        ServerGameStateManager? game = scope.ServiceProvider.GetRequiredService<GameCoordinator>().GetGameByPlayerID(playerID);
+                                        StudyStateManager? study = game?.Study;
+
+                                        // StudyStateManager chooses whether to add SLAM drift to the global pose before sending it to the player.
+                                        if (study != null)
+                                        {
+                                            SharedLibrary.Game.Actions.Pose truePose = globalPose;
+                                            globalPose = study.AddDriftPoseError(globalPose, playerID);
+
+                                            // The drift this player is being sent (none outside the high drift conditions), kept for the spatial inconsistency metrics.
+                                            game!.RecordDrift(playerID, SharedLibrary.Utilities.TimeUtilities.GetTime(), truePose, globalPose);
+                                        }
+                                    }
+
+                                    syncResponseDTO = new SyncResponseDTO(keyFrameDTO.ID, cameraLocalPose, globalPose);
+                                }
+                                else
+                                {
+                                    // The player is not yet placed in the global map, so they cannot get a global pose.
+                                    syncResponseDTO = new SyncResponseDTO(keyFrameDTO.ID, cameraLocalPose);
+                                }
+
                                 _ = AddOutgoingDTO(playerID, syncResponseDTO);
                             }
                             catch (Exception ex)

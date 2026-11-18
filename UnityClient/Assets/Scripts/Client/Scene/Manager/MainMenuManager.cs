@@ -1,3 +1,4 @@
+using Client.Utilities;
 using Client.Communication.Manager;
 using SharedLibrary.Communication.Connection;
 using SharedLibrary.Communication.DataTransferObjects.Game;
@@ -45,6 +46,19 @@ namespace Client.Scene.Manager
         [Tooltip("Optional label shown below the button. Displays connection status.")]
         [SerializeField] TextMeshProUGUI _statusText;
 
+        [Header("Metrics Display")]
+        [Tooltip("Optional button that turns the metrics shown in the headset on or off. If left empty, one is created next to the Play button.")]
+        [SerializeField] Button _metricsToggleButton;
+
+        [Tooltip("Optional label on that button (shows Metrics: ON / OFF). Found on the button if left empty.")]
+        [SerializeField] TextMeshProUGUI _metricsToggleLabel;
+
+        [Tooltip("How much taller the menu pane is made (canvas units) when the toggle button is created here, so the button fits on it.")]
+        [SerializeField] float _menuExtraHeightForToggle = 80f;
+
+        [Tooltip("Gap between the Play button and the created toggle button (canvas units).")]
+        [SerializeField] float _toggleButtonSpacing = 10f;
+
         bool _isQueued;
         bool _mainMenuHidden;
 
@@ -55,6 +69,7 @@ namespace Client.Scene.Manager
             if (_playButton != null)
                 _playButton.onClick.AddListener(QueueGame);
 
+            SetUpMetricsToggle();
             PositionMenuInFrontOfPlayer();
             StartCoroutine(AutoMoveMenu());
         }
@@ -63,6 +78,8 @@ namespace Client.Scene.Manager
         {
             if (_playButton != null)
                 _playButton.onClick.RemoveListener(QueueGame);
+            if (_metricsToggleButton != null)
+                _metricsToggleButton.onClick.RemoveListener(ToggleMetrics);
         }
 
         IEnumerator Start()
@@ -182,6 +199,127 @@ namespace Client.Scene.Manager
             canvasGroup.alpha = 0f;
             _mainMenuCanvas.gameObject.SetActive(false);
         }
+
+        #region Metrics Toggle
+
+        void SetUpMetricsToggle()
+        {
+            if (_metricsToggleButton == null)
+                _metricsToggleButton = CreateMetricsToggleButton();
+            if (_metricsToggleButton == null)
+                return;
+
+            if (_metricsToggleLabel == null)
+                _metricsToggleLabel = _metricsToggleButton.GetComponentInChildren<TextMeshProUGUI>(true);
+
+            _metricsToggleButton.onClick.AddListener(ToggleMetrics);
+            UpdateMetricsToggleVisuals();
+        }
+
+        /// <summary>Turns the metrics shown in the headset on or off (remembered between runs).</summary>
+        public void ToggleMetrics()
+        {
+            MetricsHud.Visible = !MetricsHud.Visible;
+            UpdateMetricsToggleVisuals();
+        }
+
+        /// <summary>On: white button, black text. Off: black button, white text. Nothing else about the button changes.</summary>
+        void UpdateMetricsToggleVisuals()
+        {
+            bool on = MetricsHud.Visible;
+
+            if (_metricsToggleLabel != null)
+            {
+                _metricsToggleLabel.text = on ? "Metrics: ON" : "Metrics: OFF";
+                _metricsToggleLabel.color = on ? Color.black : Color.white;
+            }
+
+            if (_metricsToggleButton != null && _metricsToggleButton.targetGraphic != null)
+                _metricsToggleButton.targetGraphic.color = on ? Color.white : Color.black;
+        }
+
+        /// <summary>
+        /// Builds the toggle button in code, on the same canvas as the Play button, with its shape and font copied from it and placed just below it
+        /// (the pane is made taller to make room). Its colour is set by <see cref="UpdateMetricsToggleVisuals"/>.
+        /// (If the Play button sits in a layout group, the group places the new one instead.)
+        /// </summary>
+        Button CreateMetricsToggleButton()
+        {
+            RectTransform playRect = _playButton != null ? _playButton.GetComponent<RectTransform>() : null;
+            Transform parent = playRect != null ? playRect.parent : (_mainMenuCanvas != null ? _mainMenuCanvas.transform : null);
+            if (parent == null)
+                return null;
+
+            // Taller pane: the stretched background and poke surface grow with it, and the title and Play button (anchored to the top) and the
+            // status text (anchored to the bottom) stay where they are, so the new room opens up between them.
+            if (_mainMenuCanvas != null && _menuExtraHeightForToggle > 0f)
+            {
+                var canvasRect = _mainMenuCanvas.GetComponent<RectTransform>();
+                if (canvasRect != null)
+                    canvasRect.sizeDelta += new Vector2(0f, _menuExtraHeightForToggle);
+            }
+
+            var go = new GameObject("MetricsToggleButton", typeof(RectTransform), typeof(Image), typeof(Button));
+            var rect = (RectTransform)go.transform;
+            rect.SetParent(parent, false);
+
+            var image = go.GetComponent<Image>();
+            var button = go.GetComponent<Button>();
+            button.targetGraphic = image;
+
+            if (playRect != null)
+            {
+                rect.anchorMin = playRect.anchorMin;
+                rect.anchorMax = playRect.anchorMax;
+                rect.pivot = playRect.pivot;
+                rect.sizeDelta = playRect.sizeDelta;
+                rect.anchoredPosition3D = playRect.anchoredPosition3D - new Vector3(0f, playRect.rect.height + _toggleButtonSpacing, 0f);
+            }
+            else
+            {
+                rect.sizeDelta = new Vector2(300f, 80f);
+            }
+
+            Image playImage = _playButton != null ? _playButton.GetComponent<Image>() : null;
+            if (playImage != null)
+            {
+                image.sprite = playImage.sprite;
+                image.type = playImage.type;
+                image.material = playImage.material;
+            }
+
+            // The colour only follows the on/off state: no hover or press tint.
+            button.transition = Selectable.Transition.None;
+
+            var labelGo = new GameObject("Label", typeof(RectTransform), typeof(TextMeshProUGUI));
+            var labelRect = (RectTransform)labelGo.transform;
+            labelRect.SetParent(rect, false);
+            labelRect.anchorMin = Vector2.zero;
+            labelRect.anchorMax = Vector2.one;
+            labelRect.offsetMin = Vector2.zero;
+            labelRect.offsetMax = Vector2.zero;
+
+            var label = labelGo.GetComponent<TextMeshProUGUI>();
+            label.alignment = TextAlignmentOptions.Center;
+            label.raycastTarget = false;
+            label.enableAutoSizing = true;
+            label.fontSizeMin = 4f;
+
+            TextMeshProUGUI playLabel = _playButton != null ? _playButton.GetComponentInChildren<TextMeshProUGUI>(true) : null;
+            if (playLabel != null)
+            {
+                label.font = playLabel.font;
+                label.fontSizeMax = playLabel.fontSize;
+            }
+            else
+            {
+                label.fontSizeMax = 24f;
+            }
+
+            return button;
+        }
+
+        #endregion Metrics Toggle
 
         #region Private Helpers
 
@@ -305,7 +443,7 @@ namespace Client.Scene.Manager
 
             _mainMenuCanvas.transform.SetPositionAndRotation(position, rotation);
 
-            Debug.Log($"[{nameof(MainMenuManager)}]: menu canvas placed at {position} facing {flatForward}.");
+            DebugLog.Log($"[{nameof(MainMenuManager)}]: menu canvas placed at {position} facing {flatForward}.");
         }
 
 

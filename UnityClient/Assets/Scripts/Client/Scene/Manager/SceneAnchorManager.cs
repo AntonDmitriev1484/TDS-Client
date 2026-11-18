@@ -1,10 +1,12 @@
-﻿using Assets.Scripts.Utilities;
+﻿using Client.Utilities;
+using Assets.Scripts.Utilities;
 using Meta.XR.MRUtilityKit;
 using SharedLibrary.Communication.DataTransferObjects.SpatialSync;
 using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
 using UnityEngine;
+using UnityEngine.Rendering;
 
 namespace Client.Scene.Manager
 {
@@ -29,6 +31,11 @@ namespace Client.Scene.Manager
                  "so you can see what was loaded and whether it matches the room.")]
         public bool ShowAnchors = true;
 
+        [Tooltip("MRUK's world locking: when on, MRUK moves the OVRCameraRig's TrackingSpace every frame so the room anchors stay lined up with the real room " +
+                 "as the headset refines its map. That shifts everything virtual (and the poses sent for the spatial sync) whenever the correction changes. " +
+                 "Off by default, so tracking is left as the headset reports it. Applied to the MRUK in the scene too, whoever created it.")]
+        public bool EnableWorldLock = false;
+
         public static SceneAnchorManager Instance { get; private set; }
 
         /// <summary>How many scene anchors the headset's current room has (0 until the room is loaded).</summary>
@@ -42,6 +49,26 @@ namespace Client.Scene.Manager
         private Material _lineMaterial;
         private Font _labelFont;
         private float _nextLogTime;
+        private float _nextVisualCheck;
+
+        // The room's anchors as they are described to the server, worked out once per room (see BuildKeyFrame).
+        private readonly List<CachedAnchor> _cachedAnchors = new List<CachedAnchor>();
+        private MRUKRoom _cachedRoom;
+        private int _cachedRoomAnchorCount = -1;
+        private bool _cacheStale;
+
+        /// <summary>
+        /// What never changes about one anchor once the room is loaded: which anchor it is, its label, its id, and the middle and size of its
+        /// bounds in its own space. Only its pose in the world is read again for each key frame.
+        /// </summary>
+        private sealed class CachedAnchor
+        {
+            public MRUKAnchor Anchor;
+            public string Uuid;
+            public string Label;
+            public Vector3 LocalCentre;
+            public SharedLibrary.Game.Vector3 Size;
+        }
 
         private void Awake()
         {
@@ -56,6 +83,7 @@ namespace Client.Scene.Manager
                 var host = new GameObject("MRUK");
                 host.SetActive(false);
                 var mruk = host.AddComponent<MRUK>();
+                mruk.EnableWorldLock = EnableWorldLock;
                 mruk.SceneSettings = new MRUK.MRUKSettings
                 {
                     DataSource = MRUK.SceneDataSource.Device,
@@ -64,7 +92,7 @@ namespace Client.Scene.Manager
                     SceneJsons = new TextAsset[0],
                 };
                 host.SetActive(true);
-                Debug.Log($"[{nameof(SceneAnchorManager)}] No MRUK in the scene: added one to load the room from the device.");
+                DebugLog.Log($"[{nameof(SceneAnchorManager)}] No MRUK in the scene: added one to load the room from the device.");
             }
         }
 
@@ -78,6 +106,10 @@ namespace Client.Scene.Manager
         {
             while (MRUK.Instance == null)
                 await Task.Yield();
+
+            // Also for an MRUK that the scene has (its own setting is overridden here, so there is one switch for it).
+            MRUK.Instance.EnableWorldLock = EnableWorldLock;
+            DebugLog.Log($"[{nameof(SceneAnchorManager)}] MRUK world lock is {(EnableWorldLock ? "on" : "off")}.");
 
             if (MRUK.Instance.SceneSettings != null && MRUK.Instance.SceneSettings.LoadSceneOnStartup)
                 return; // the scene's MRUK loads the room itself
@@ -101,7 +133,7 @@ namespace Client.Scene.Manager
 #if !UNITY_EDITOR && UNITY_ANDROID
             // Space Setup pauses the app and prompts the user to scan the room; the app resumes when they finish or cancel, and the new scan is
             // what the load below reads.
-            Debug.Log($"[{nameof(SceneAnchorManager)}] {reason}: starting Space Setup, scan the room.");
+            DebugLog.Log($"[{nameof(SceneAnchorManager)}] {reason}: starting Space Setup, scan the room.");
             if (!await OVRScene.RequestSpaceSetup())
             {
                 Debug.LogWarning($"[{nameof(SceneAnchorManager)}] Space Setup could not be started.");
@@ -137,7 +169,7 @@ namespace Client.Scene.Manager
             {
                 MRUK.LoadDeviceResult result = await MRUK.Instance.LoadSceneFromDevice(requestSceneCaptureIfNoDataFound: false);
                 if (result == MRUK.LoadDeviceResult.Success)
-                    Debug.Log($"[{nameof(SceneAnchorManager)}] Room loaded from the device ({MRUK.Instance.Rooms.Count} room(s)).");
+                    DebugLog.Log($"[{nameof(SceneAnchorManager)}] Room loaded from the device ({MRUK.Instance.Rooms.Count} room(s)).");
                 else
                     Debug.LogWarning($"[{nameof(SceneAnchorManager)}] Loading the room from the device failed: {result}. " + result switch
                     {
@@ -176,10 +208,21 @@ namespace Client.Scene.Manager
             MRUKRoom room = CurrentRoom();
             if (room != null)
             {
-                foreach (MRUKAnchor anchor in room.Anchors)
+                RefreshAnchorCache(room);
+
+                // Only the poses are read again (the anchors are tracked by the headset, so their world poses can still shift): that is a
+                // transform each, with no bounds, labels or ids to work out.
+                foreach (CachedAnchor cached in _cachedAnchors)
                 {
-                    if (anchor != null && TryDescribe(anchor, out SceneAnchorDTO dto))
-                        keyFrame.Anchors.Add(dto);
+                    if (cached.Anchor == null)
+                    {
+                        _cacheStale = true; // the anchor was destroyed: describe the room again next time
+                        continue;
+                    }
+
+                    Transform t = cached.Anchor.transform;
+                    keyFrame.Anchors.Add(new SceneAnchorDTO(cached.Uuid, cached.Label,
+                        Conversions.ToSharedPose(t.TransformPoint(cached.LocalCentre), t.rotation), cached.Size));
                 }
             }
 
@@ -187,7 +230,7 @@ namespace Client.Scene.Manager
             if (Time.unscaledTime >= _nextLogTime)
             {
                 _nextLogTime = Time.unscaledTime + 10f;
-                Debug.Log(room == null
+                DebugLog.Log(room == null
                     ? $"[{nameof(SceneAnchorManager)}] No room loaded yet (is Space Setup done and scene permission granted?)."
                     : $"[{nameof(SceneAnchorManager)}] Sending {AnchorCount} scene anchors.");
             }
@@ -207,25 +250,40 @@ namespace Client.Scene.Manager
         }
 
         /// <summary>
-        /// One scene anchor as a label, the pose of the middle of its bounds and the size of its bounds. Flat anchors (walls, doors, windows, floor,
-        /// ceiling) use their plane; the rest (furniture) use their volume, falling back to the plane.
+        /// Describes the room's anchors once (label, id, and the middle and size of their bounds) and keeps that for every later key frame. It is
+        /// done again only if the room is a different one, its number of anchors changes, an anchor was destroyed, or nothing could be described
+        /// yet (the room is still loading).
         /// </summary>
-        private static bool TryDescribe(MRUKAnchor anchor, out SceneAnchorDTO dto)
+        private void RefreshAnchorCache(MRUKRoom room)
         {
-            dto = null;
-            string label = anchor.Label.ToString();
-            if (label == "GLOBAL_MESH")
-                return false;
+            int anchorCount = room.Anchors.Count;
+            if (!_cacheStale && room == _cachedRoom && anchorCount == _cachedRoomAnchorCount && _cachedAnchors.Count > 0)
+                return;
 
-            Transform t = anchor.transform;
-            if (!TryLocalBounds(anchor, label, out Vector3 localCentre, out Vector3 size, out _))
-                return false;
-            Vector3 centre = t.TransformPoint(localCentre);
+            _cachedAnchors.Clear();
+            foreach (MRUKAnchor anchor in room.Anchors)
+            {
+                if (anchor == null)
+                    continue;
 
-            string uuid = anchor.Anchor.Uuid != Guid.Empty ? anchor.Anchor.Uuid.ToString("D") : anchor.GetInstanceID().ToString();
-            dto = new SceneAnchorDTO(uuid, label, Conversions.ToSharedPose(centre, t.rotation),
-                new SharedLibrary.Game.Vector3(size.x, size.y, size.z));
-            return true;
+                string label = anchor.Label.ToString();
+                if (label == "GLOBAL_MESH" || !TryLocalBounds(anchor, label, out Vector3 localCentre, out Vector3 size, out _))
+                    continue;
+
+                _cachedAnchors.Add(new CachedAnchor
+                {
+                    Anchor = anchor,
+                    Uuid = anchor.Anchor.Uuid != Guid.Empty ? anchor.Anchor.Uuid.ToString("D") : anchor.GetInstanceID().ToString(),
+                    Label = label,
+                    LocalCentre = localCentre,
+                    Size = new SharedLibrary.Game.Vector3(size.x, size.y, size.z),
+                });
+            }
+
+            _cachedRoom = room;
+            _cachedRoomAnchorCount = anchorCount;
+            _cacheStale = false;
+            DebugLog.Log($"[{nameof(SceneAnchorManager)}] Described {_cachedAnchors.Count} of the room's {anchorCount} scene anchors; the key frames reuse this.");
         }
 
         /// <summary>
@@ -263,6 +321,12 @@ namespace Client.Scene.Manager
 
         private void Update()
         {
+            // Which room is current (and how many anchors it has) hardly ever changes, and MRUK works it out by testing the head against the
+            // room outlines, so it is checked twice a second and not every frame.
+            if (Time.unscaledTime < _nextVisualCheck)
+                return;
+            _nextVisualCheck = Time.unscaledTime + 0.5f;
+
             MRUKRoom room = ShowAnchors ? CurrentRoom() : null;
             int count = room != null ? room.Anchors.Count : -1;
             if (room == _visualRoom && count == _visualAnchorCount)
@@ -286,19 +350,42 @@ namespace Client.Scene.Manager
                     Debug.LogWarning($"[{nameof(SceneAnchorManager)}] Could not draw an anchor: {ex.Message}");
                 }
             }
-            Debug.Log($"[{nameof(SceneAnchorManager)}] Drawing {_visuals.Count} scene anchors in the headset.");
+            DebugLog.Log($"[{nameof(SceneAnchorManager)}] Drawing {_visuals.Count} scene anchors in the headset.");
         }
 
-        /// <summary>The names face the headset.</summary>
-        private void LateUpdate()
+        private void OnEnable()
         {
-            Transform head = Head();
-            if (head == null)
+            // The names are turned to face the headset right before a camera culls and renders (not in LateUpdate): the headset pose is
+            // updated again after LateUpdate, so turning them earlier faces them at a slightly old head pose and the text swims when you turn.
+            Camera.onPreCull += FaceLabelsToCamera;
+            RenderPipelineManager.beginCameraRendering += FaceLabelsToCamera;
+        }
+
+        private void OnDisable()
+        {
+            Camera.onPreCull -= FaceLabelsToCamera;
+            RenderPipelineManager.beginCameraRendering -= FaceLabelsToCamera;
+        }
+
+        private void FaceLabelsToCamera(ScriptableRenderContext context, Camera cam) => FaceLabelsToCamera(cam);
+
+        private void FaceLabelsToCamera(Camera cam)
+        {
+            if (_labels.Count == 0 || cam == null || cam.cameraType != CameraType.Game)
                 return;
+
+            Transform head = Head();
+            if (head == null || (cam.transform != head && !cam.CompareTag("MainCamera")))
+                return; // only the headset's camera
+
+            Vector3 eye = cam.transform.position;
             foreach (Transform label in _labels)
             {
-                if (label != null)
-                    label.rotation = Quaternion.LookRotation(label.position - head.position);
+                if (label == null)
+                    continue;
+                Vector3 away = label.position - eye;
+                if (away.sqrMagnitude > 1e-6f)
+                    label.rotation = Quaternion.LookRotation(away);
             }
         }
 
@@ -320,38 +407,39 @@ namespace Client.Scene.Manager
             if (label == "GLOBAL_MESH" || !TryLocalBounds(anchor, label, out Vector3 c, out Vector3 size, out bool isPlane))
                 return;
 
+            // Each anchor is one LineRenderer (one draw call): the outline is a single path, retracing an edge where it has to.
             Color color = LabelColor(label);
             Vector3 h = size * 0.5f;
             if (isPlane)
             {
-                AddLine(anchor.transform, true, color, new Vector3(c.x - h.x, c.y - h.y, c.z), new Vector3(c.x + h.x, c.y - h.y, c.z),
-                    new Vector3(c.x + h.x, c.y + h.y, c.z), new Vector3(c.x - h.x, c.y + h.y, c.z));
-                AddLine(anchor.transform, false, color, c, c + new Vector3(0f, 0f, 0.3f)); // which way the surface faces
+                Vector3 r0 = new Vector3(c.x - h.x, c.y - h.y, c.z), r1 = new Vector3(c.x + h.x, c.y - h.y, c.z);
+                Vector3 r2 = new Vector3(c.x + h.x, c.y + h.y, c.z), r3 = new Vector3(c.x - h.x, c.y + h.y, c.z);
+                // The tick at the first corner shows which way the surface faces.
+                AddLine(anchor.transform, color, r0 + new Vector3(0f, 0f, 0.3f), r0, r1, r2, r3, r0);
             }
             else
             {
-                Vector3[] lower = { c + new Vector3(-h.x, -h.y, -h.z), c + new Vector3(h.x, -h.y, -h.z), c + new Vector3(h.x, -h.y, h.z), c + new Vector3(-h.x, -h.y, h.z) };
-                Vector3[] upper = { c + new Vector3(-h.x, h.y, -h.z), c + new Vector3(h.x, h.y, -h.z), c + new Vector3(h.x, h.y, h.z), c + new Vector3(-h.x, h.y, h.z) };
-                AddLine(anchor.transform, true, color, lower);
-                AddLine(anchor.transform, true, color, upper);
-                for (int i = 0; i < 4; i++)
-                    AddLine(anchor.transform, false, color, lower[i], upper[i]);
+                Vector3 l0 = c + new Vector3(-h.x, -h.y, -h.z), l1 = c + new Vector3(h.x, -h.y, -h.z), l2 = c + new Vector3(h.x, -h.y, h.z), l3 = c + new Vector3(-h.x, -h.y, h.z);
+                Vector3 u0 = c + new Vector3(-h.x, h.y, -h.z), u1 = c + new Vector3(h.x, h.y, -h.z), u2 = c + new Vector3(h.x, h.y, h.z), u3 = c + new Vector3(-h.x, h.y, h.z);
+                AddLine(anchor.transform, color, l0, l1, l2, l3, l0, u0, u1, u2, u3, u0, u3, l3, l2, u2, u1, l1);
             }
             AddLabel(anchor.transform, c, label.ToLowerInvariant().Replace('_', ' '), color);
         }
 
-        private void AddLine(Transform parent, bool loop, Color color, params Vector3[] points)
+        private void AddLine(Transform parent, Color color, params Vector3[] points)
         {
             var go = new GameObject("SceneAnchorOutline");
             go.transform.SetParent(parent, false);
             var line = go.AddComponent<LineRenderer>();
             line.useWorldSpace = false;
-            line.loop = loop;
+            line.loop = false;
+            line.numCornerVertices = 0;
             line.positionCount = points.Length;
             line.SetPositions(points);
             line.startWidth = line.endWidth = 0.012f;
             line.startColor = line.endColor = color;
             line.sharedMaterial = LineMaterial();
+            ConfigureRenderer(line);
             _visuals.Add(go);
         }
 
@@ -371,9 +459,21 @@ namespace Client.Scene.Manager
             mesh.characterSize = 0.012f;
             mesh.anchor = TextAnchor.MiddleCenter;
             mesh.color = color;
-            go.GetComponent<MeshRenderer>().sharedMaterial = font.material;
+            var labelRenderer = go.GetComponent<MeshRenderer>();
+            labelRenderer.sharedMaterial = font.material;
+            ConfigureRenderer(labelRenderer);
             _visuals.Add(go);
             _labels.Add(go.transform);
+        }
+
+        /// <summary>The outlines and names are only drawn: no shadows (the shadow pass would draw all of them again), probes or motion vectors.</summary>
+        private static void ConfigureRenderer(Renderer renderer)
+        {
+            renderer.shadowCastingMode = ShadowCastingMode.Off;
+            renderer.receiveShadows = false;
+            renderer.lightProbeUsage = LightProbeUsage.Off;
+            renderer.reflectionProbeUsage = ReflectionProbeUsage.Off;
+            renderer.motionVectorGenerationMode = MotionVectorGenerationMode.ForceNoMotion;
         }
 
         private Material LineMaterial()

@@ -57,7 +57,17 @@ public class GrabbableCube : MonoBehaviour
     /// Marks the cube grabbed by <paramref name="hand"/> and starts following it, keeping the
     /// current pose relative to the hand. Grabbing with another hand hands the cube over.
     /// </summary>
-    public void Grab(Transform hand)
+    public void Grab(Transform hand) => Grab(hand, hasFollowOffset: false, default, default);
+
+    /// <summary>
+    /// Like <see cref="Grab(Transform)"/>, but holds the cube at the given pose in the hand's space (taken from the grab action) instead
+    /// of working the offset out from where the cube and hand are right now. So grabbing again after the cube was let go of
+    /// and moved (the game state replaying the grab on top of a newer server state) keeps the same offset.
+    /// </summary>
+    public void Grab(Transform hand, Vector3 followLocalPosition, Quaternion followLocalRotation) =>
+        Grab(hand, hasFollowOffset: true, followLocalPosition, followLocalRotation);
+
+    void Grab(Transform hand, bool hasFollowOffset, Vector3 followLocalPosition, Quaternion followLocalRotation)
     {
         // If we have already followed the hand, then return early.
         if (_followTarget == hand)
@@ -70,8 +80,16 @@ public class GrabbableCube : MonoBehaviour
         if (hand == null)
             return;
 
-        _followLocalPosition = hand.InverseTransformPoint(transform.position);
-        _followLocalRotation = Quaternion.Inverse(hand.rotation) * transform.rotation;
+        if (hasFollowOffset)
+        {
+            _followLocalPosition = followLocalPosition;
+            _followLocalRotation = followLocalRotation;
+        }
+        else
+        {
+            _followLocalPosition = hand.InverseTransformPoint(transform.position);
+            _followLocalRotation = Quaternion.Inverse(hand.rotation) * transform.rotation;
+        }
     }
 
     void Awake()
