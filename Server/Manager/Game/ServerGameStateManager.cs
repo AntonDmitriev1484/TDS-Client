@@ -35,6 +35,10 @@ namespace Server.Manager.Game
         Vector3 _boardSize = new Vector3(0.75f, 0.1f, 0.75f);
         // Cubes spawn on one cell of a grid this many cells wide and deep.
         int _gridSize = 8;
+        // Cubes spawn only in this many rows of the grid, centered on the middle line between the players (the board's Z axis
+        // runs from player 1 to player 2, so fewer rows means spawns are further from both players). They still use the board's
+        // full extent across that line. Set to _gridSize to spawn on the whole board again.
+        int _spawnRows = 2;
         // How far each player's goal is from the layout's center, horizontally, toward that player's end of the board (meters).
         // It is also how far ahead of a lone player the center goes (BoardLayout.InFrontOf).
         public const float GoalDistanceFromCenter = 0.5f;
@@ -244,12 +248,15 @@ namespace Server.Manager.Game
         }
 
         /// <summary>
-        /// A new cube with the next ID on a random cell of the board's grid.
+        /// A new cube with the next ID on a random cell in the middle <see cref="_spawnRows"/> rows of the board's grid
+        /// (all columns), so it spawns near the middle line between the players.
         /// </summary>
         CubeState CreateCubeOnBoard()
         {
             BoardState board = GameState.Board;
-            var gridLocation = (X: _random.Next(board.GridSize), Z: _random.Next(board.GridSize));
+            int spawnRows = Math.Clamp(_spawnRows, 1, board.GridSize);
+            int firstRow = (board.GridSize - spawnRows) / 2;
+            var gridLocation = (X: _random.Next(board.GridSize), Z: firstRow + _random.Next(spawnRows));
             var pose = new Pose(board.GridToPosition(gridLocation.X, gridLocation.Z, _cubeSize), board.Pose.Rotation);
 
             return new CubeState($"cube-{_nextCubeID++}", ServerTime, ServerTime, pose, GameState.PlayerIDs, gridLocation, _cubeSize);

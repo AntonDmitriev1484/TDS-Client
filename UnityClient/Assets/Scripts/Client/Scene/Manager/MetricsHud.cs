@@ -19,7 +19,7 @@ namespace Client.Scene.Manager
         [Header("Look")]
         [SerializeField] float _characterSize = 0.0035f;
         [SerializeField] int _fontSize = 100;
-        [SerializeField] Color _color = new Color(0.55f, 1f, 0.55f, 1f);
+        [SerializeField] Color _color = new Color(0.55f, 1f, 0.55f, 0.25f);
 
         [Tooltip("The text is rewritten at most this often (seconds).")]
         [SerializeField] float _refreshInterval = 0.1f;
@@ -129,7 +129,7 @@ namespace Client.Scene.Manager
 
         static string Format(Metrics m)
         {
-            return $"Metric 1: {m.LatencyMs:F0} ms\n"
+            return $"Metric 1: {m.LatencyMs:F0}\n"
                 + $"Metric 2: {FormatInconsistency(m.PairwiseStateInconsistency, m.PairwiseStateMeanDistanceCm)}\n"
                 + $"Metric 3: {FormatInconsistency(m.RetroactiveStateInconsistency, m.RetroactiveStateMeanDistanceCm)}\n"
                 + $"Metric 4: {FormatInconsistency(m.PairwiseSpatialInconsistency, m.PairwiseSpatialMeanDistanceCm)}\n"
@@ -137,6 +137,6 @@ namespace Client.Scene.Manager
         }
 
         static string FormatInconsistency(float inconsistency, float meanDistanceCm) =>
-            inconsistency < 0f ? "--" : $"{inconsistency:F2} ({meanDistanceCm:F1} cm)";
+            inconsistency < 0f ? "--" : $"{inconsistency:F2}";
     }
 }

@@ -16,9 +16,9 @@ using Vector3 = UnityEngine.Vector3;
 [RequireComponent(typeof(Renderer))]
 public class GrabbableCube : MonoBehaviour
 {
-    [SerializeField] Color _defaultColor = new Color(0.2f, 0.6f, 1f);
-    [SerializeField] Color _ourGrabbedColor = new Color(1f, 0.5f, 0f);
-    [SerializeField] Color _anotherGrabbedColor = new Color(1f, 0.1f, 0f);
+    [SerializeField] Color _defaultColor = new Color(0.2f, 0.6f, 1f, 0.8f);
+    [SerializeField] Color _ourGrabbedColor = new Color(1f, 0.5f, 0f, 0.8f);
+    [SerializeField] Color _anotherGrabbedColor = new Color(1f, 0.1f, 0f, 0.8f);
 
     [SerializeField] GrabbedState grabbed;
 
@@ -95,6 +95,7 @@ public class GrabbableCube : MonoBehaviour
     void Awake()
     {
         _material = GetComponent<Renderer>().material;
+        ConfigureTransparency();
         Collider = GetComponent<Collider>();
         ApplyColor();
     }
@@ -141,5 +142,38 @@ public class GrabbableCube : MonoBehaviour
             }
         }
 
+    }
+
+    void ConfigureTransparency()
+    {
+        if (_material == null)
+            return;
+
+        // Primitive materials are opaque by default, so their alpha channel is ignored.
+        if (_material.HasProperty("_Mode"))
+        {
+            // Standard shader: Fade mode.
+            _material.SetFloat("_Mode", 2f);
+            _material.SetInt("_SrcBlend", (int)UnityEngine.Rendering.BlendMode.SrcAlpha);
+            _material.SetInt("_DstBlend", (int)UnityEngine.Rendering.BlendMode.OneMinusSrcAlpha);
+            _material.SetInt("_ZWrite", 0);
+            _material.DisableKeyword("_ALPHATEST_ON");
+            _material.EnableKeyword("_ALPHABLEND_ON");
+            _material.DisableKeyword("_ALPHAPREMULTIPLY_ON");
+        }
+
+        if (_material.HasProperty("_Surface"))
+        {
+            // URP Lit shader: transparent alpha blending.
+            _material.SetFloat("_Surface", 1f);
+            _material.SetFloat("_Blend", 0f);
+            _material.SetInt("_SrcBlend", (int)UnityEngine.Rendering.BlendMode.SrcAlpha);
+            _material.SetInt("_DstBlend", (int)UnityEngine.Rendering.BlendMode.OneMinusSrcAlpha);
+            _material.SetInt("_ZWrite", 0);
+            _material.EnableKeyword("_SURFACE_TYPE_TRANSPARENT");
+            _material.DisableKeyword("_ALPHAPREMULTIPLY_ON");
+        }
+
+        _material.renderQueue = (int)UnityEngine.Rendering.RenderQueue.Transparent;
     }
 }

@@ -1,5 +1,6 @@
-﻿using Client.Utilities;
 using Assets.Scripts.Utilities;
+using Client.Communication.Config;
+using Client.Utilities;
 using Meta.XR.MRUtilityKit;
 using SharedLibrary.Communication.DataTransferObjects.SpatialSync;
 using System;
@@ -104,8 +105,10 @@ namespace Client.Scene.Manager
         /// </summary>
         private async void Start()
         {
-            while (MRUK.Instance == null)
+            while (MRUK.Instance == null || ServerConfig.Instance == null)
                 await Task.Yield();
+
+            ShowAnchors = ServerConfig.Instance.DebugMode;
 
             // Also for an MRUK that the scene has (its own setting is overridden here, so there is one switch for it).
             MRUK.Instance.EnableWorldLock = EnableWorldLock;
